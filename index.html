@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cartório • Chat com IA (offline)</title>
+<title>Cartório • Chat com IA</title>
 <style>
   :root{
     --panel:#111b21;
@@ -81,52 +81,175 @@
   const fileInp = document.getElementById('file');
   const aiToggle = document.getElementById('ai');
 
-  const services = [
-    {id:'certidao_nascimento', nome:'Certidão de Nascimento', setor:'Registro Civil', preco:'R$ 45,00', prazo:'2 dias úteis', docs:['Nome completo','Filiação','Data de nascimento','Número do livro e folha se souber']},
-    {id:'certidao_casamento', nome:'Certidão de Casamento', setor:'Registro Civil', preco:'R$ 55,00', prazo:'2 dias úteis', docs:['Nome dos cônjuges','Data do casamento','Número do livro e folha se souber']},
-    {id:'certidao_obito', nome:'Certidão de Óbito', setor:'Registro Civil', preco:'R$ 55,00', prazo:'2 dias úteis', docs:['Nome do falecido','Data do óbito','Nome dos pais','Número do livro e folha se souber']},
-    {id:'inteiro_teor', nome:'Certidão de Inteiro Teor', setor:'Registro Civil', preco:'R$ 75,00', prazo:'5 dias úteis', docs:['Dados do registro','Justificativa de uso']},
-    {id:'abertura_firma', nome:'Abertura de Firma', setor:'Notas', preco:'R$ 25,00', prazo:'10 minutos', docs:['Documento oficial com foto','CPF']},
-    {id:'reconhecimento', nome:'Reconhecimento de Firma', setor:'Notas', preco:'R$ 10,00 por assinatura', prazo:'Imediato', docs:['Documento a ser assinado','Firma aberta no cartório ou abertura no ato']},
-    {id:'autenticacao', nome:'Autenticação de Cópia', setor:'Notas', preco:'R$ 8,00 por página', prazo:'Imediato', docs:['Documento original legível']},
-    {id:'procuracao_publica', nome:'Procuração Pública', setor:'Notas', preco:'R$ 260,00', prazo:'1 dia útil', docs:['Dados do outorgante e outorgado','Documento oficial com foto','CPF','Descrição dos poderes']},
-    {id:'escritura_compra_venda', nome:'Escritura de Compra e Venda', setor:'Notas', preco:'R$ 980,00', prazo:'3 dias úteis', docs:['RG e CPF','Comprovante de estado civil','Matrícula atualizada do imóvel','ITBI se devido','Comprovante de endereço']},
-    {id:'uniao_estavel', nome:'Escritura de União Estável', setor:'Notas', preco:'R$ 420,00', prazo:'1 dia útil', docs:['RG e CPF do casal','Certidões de estado civil atualizadas','Comprovante de endereço']},
-    {id:'apostila', nome:'Apostila de Haia', setor:'Notas', preco:'R$ 90,00 por documento', prazo:'3 dias úteis', docs:['Documento original','Tradução juramentada se houver']},
-    {id:'protesto_cancelamento', nome:'Cancelamento de Protesto', setor:'Protesto', preco:'R$ 68,00', prazo:'3 dias úteis', docs:['Carta de anuência do credor','Documento de identificação','Comprovante de pagamento de emolumentos']},
-    {id:'rtd_notificacao', nome:'Notificação Extrajudicial', setor:'RTD', preco:'R$ 130,00', prazo:'7 dias úteis', docs:['Conteúdo da notificação','Dados do destinatário','Endereço para entrega']}
-  ];
+  // --- HELPERS ---
+  function slugify(text) {
+    return text.toString().toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, '_')
+      .replace(/[^\w-]+/g, '')
+      .replace(/_{2,}/g, '_')
+      .replace(/^-+/, '')
+      .replace(/-+$/, '');
+  }
 
-  const setores = ['Registro Civil','Notas','Protesto','RTD','Financeiro','Atendimento Geral','Ouvidoria'];
+  function parsePrice(value) {
+    if (!value) return 'Não especificado';
+    const cleaned = value.trim();
+    const low = cleaned.toLowerCase();
+    if (low === 'gratuito') return 'Gratuito';
+    if (cleaned === '-' || low.includes('valor a ser calculado') || low === 'r$ -') return 'Valor a ser calculado';
+    return cleaned.replace(/\s+/g,' ');
+  }
 
-  const bank = { banco:'Banco Modelo S.A.', agencia:'0001', conta:'12345-6', tipo:'Conta Corrente', titular:'Cartório Modelo de Notas e Registro', cnpj:'12.345.678/0001-99', pix:'12345678000199',
-    aviso:'Use somente estes dados. O cartório não envia mensagens por números diferentes nem solicita pagamento por links aleatórios.' };
+  function parseBoolean(value) {
+    if (!value) return false;
+    return value.trim().toLowerCase() === 'sim';
+  }
 
-  // Modelo IA simples baseado em pesos por intenção
-  // Cada intenção tem palavras com pesos. O somatório define a melhor intenção.
+  function parseDocuments(value) {
+    if (!value || value.trim() === '') return ['Nenhum documento especificado'];
+    const cleaned = value.trim();
+    if (cleaned.toLowerCase() === 'anexo') return ['Anexo, detalhes serão solicitados'];
+    const parts = cleaned.split(/[,;\n]+/).map(doc => doc.trim()).filter(doc => doc);
+    return parts.length > 0 ? parts : ['Nenhum documento especificado'];
+  }
+
+  function cleanText(value) {
+    if (!value) return 'Não especificado';
+    return value.trim().replace(/\s+/g,' ');
+  }
+
+  // --- CSV atualizado ---
+  const csvData = `Tabelionato de Notas	Procuração Pública	 R$ 120,00 	Sim	WhatsApp	1 dia útil 	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	1 dia útil
+Tabelionato de Notas	Escritura Pública	 Valor a ser calculado 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Tabelionato de Notas	Traslados	 R$ 51,50 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Tabelionato de Notas	Carta de Sentença	 Valor a ser calculado 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Tabelionato de Notas	Guia de ITBI	 R$ 45,90 	Sim	WhatsApp	1 dia útil 	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	1 dia útil
+Tabelionato de Notas	Testamento	 Valor a ser calculado 	Sim	WhatsApp	Prazo indefinido	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Prazo indefinido
+Tabelionato de Notas	Ata Notarial	 Valor a ser calculado 	Sim	WhatsApp	Prazo indefinido	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Prazo indefinido
+Tabelionato de Notas	Apostilamento de Haia	 R$ 120,00 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Tabelionato de Notas	E - Notariado	 Gratuito 	Sim	WhatsApp	Imediato	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Registro Civil	Nascimento	 Gratuito 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Registro Civil	Casamento	 R$ 501,90 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Registro Civil	Óbito	 Gratuito 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Registro Civil	Busca de Registro	 R$ 31,45 	Sim	WhatsApp	Até 30 dias 	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Até 30 dias
+Registro Civil	2ª Via de Certidão (Breve Relato)	 R$ 25,50 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Registro Civil	2ª Via de Certidão (Inteiro Teor)	 R$ 19,05 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Registro Civil	Livro E 	 R$ 115,95 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Registro Civil	Averbações / Retificações	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Reconhecimento de Firma	Abertura de Firma	 R$ 11,10 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Reconhecimento por Semelhança	 R$ 9,10 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Reconhecimento por Autenticidade	 R$ 9,10 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Autenticação	 R$ 4,25 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Materialização 	 R$ 35,70 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Autenticação Digital	 R$ 35,70 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Desmaterialização 	 R$ 35,70 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Sinal Público 	 R$ 9,10 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Comunicado de Venda	 R$ 92,09 	Sim	WhatsApp	Imediato	09:00 as 17:00	Não	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Reconhecimento de Firma	Autorização de Viagem Eletrônica	 R$ 199,90 	Sim	WhatsApp	Imediato	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	Imediato
+Protesto	Certidão Negativa / Positiva	 R$ 51,50 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Protesto	Consulta CPF / CNPJ	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Protesto	Realizar Apontamento	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Protesto	Certidão de Intimação 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Protesto	Boleto em Apontamento	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Protesto	Cancelamento	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
+Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis`;
+
+  const serviceLines = csvData.trim().split('\n');
+  const headers = ['setor','servico','valor_bruto','responsavel_interno','canal_abertura','tempo_medio_resposta','horario_atendimento','pode_ser_online_100','documentos_necessarios','encaminhar_orgao','sistema_usado','forma_pagamento','prazo_entrega'];
+
+  const services = serviceLines.map(line => {
+      const values = line.split('\t');
+      const serviceData = {};
+      headers.forEach((header, index) => { serviceData[header] = values[index] ? values[index].trim() : ''; });
+
+      const setor = cleanText(serviceData.setor);
+      const servico = cleanText(serviceData.servico);
+      const id = slugify(servico);
+
+      return {
+          id,
+          setor,
+          nome: servico,
+          valor_formatado: parsePrice(serviceData.valor_bruto),
+          responsavel_interno: parseBoolean(serviceData.responsavel_interno),
+          canal_abertura: cleanText(serviceData.canal_abertura),
+          tempo_medio_resposta: cleanText(serviceData.tempo_medio_resposta),
+          horario_atendimento: cleanText(serviceData.horario_atendimento),
+          pode_ser_online_100: parseBoolean(serviceData.pode_ser_online_100),
+          documentos: parseDocuments(serviceData.documentos_necessarios),
+          encaminhar_orgao: parseBoolean(serviceData.encaminhar_orgao),
+          sistema_usado: cleanText(serviceData.sistema_usado),
+          forma_pagamento: cleanText(serviceData.forma_pagamento),
+          prazo_entrega: cleanText(serviceData.prazo_entrega)
+      };
+  });
+
+  const setores = ['Tabelionato de Notas','Registro Civil','Reconhecimento de Firma','Protesto','Financeiro','Atendimento Geral','Ouvidoria'];
+
+  const bank = {
+    banco:'Banco Modelo S.A.',
+    agencia:'0001',
+    conta:'12345-6',
+    tipo:'Conta Corrente',
+    titular:'Cartório Modelo de Notas e Registro',
+    cnpj:'12.345.678/0001-99',
+    pix:'12345678000199',
+    aviso:'Use somente estes dados. O cartório não envia mensagens por números diferentes nem solicita pagamento por links aleatórios.'
+  };
+
+  // --- IA atualizada ---
   const IA = (function(){
     const intents = {
-      'dados_bancarios': {'pix':2,'dados':1.5,'banc':1.5,'conta':1.3,'agência':1.2,'agencia':1.2,'transfer':1.2,'pagamento':1.0},
-      'status': {'status':2,'protocolo':2,'andamento':1.5,'acompanhar':1.5,'atd':1.8},
-      'atendente': {'humano':2,'pessoa':1.5,'atendente':2,'falar':1.2,'setor':1.0},
-      'tabela_precos': {'preço':2,'precos':2,'preço?':2,'valor':2,'tabela':2,'quanto':1.3,'custa':1.3},
-      'certidao_nascimento': {'nascimento':2,'2via':1.2,'certidao':1.2,'registro':1.0,'bebê':1.0},
-      'certidao_casamento': {'casamento':2,'certidao':1.2,'casar':1.2,'matrimônio':1.2},
-      'certidao_obito': {'óbito':2,'obito':2,'falecimento':1.5,'certidao':1.2},
-      'inteiro_teor': {'inteiro':2,'teor':2,'cópia':1.0,'copia':1.0},
-      'reconhecimento': {'firma':2,'reconhecimento':2,'assinatura':1.5},
-      'autenticacao': {'autentic':2,'cópia':1.5,'copia':1.5,'xerox':1.0},
-      'procuracao_publica': {'procuração':2,'procuracao':2,'outorgante':1.2,'outorgado':1.2,'poderes':1.0},
-      'escritura_compra_venda': {'escritura':2,'compra':2,'venda':2,'imóvel':1.5,'imovel':1.5,'matrícula':1.2,'matricula':1.2},
-      'uniao_estavel': {'união':2,'uniao':2,'estável':2,'estavel':2},
-      'apostila': {'apostila':2,'haia':2,'tradução':1.2,'traducao':1.2},
-      'protesto_cancelamento': {'protesto':2,'cancelamento':2,'anuência':1.2,'anuencia':1.2},
-      'rtd_notificacao': {'notificação':2,'notificacao':2,'extrajudicial':2}
+      dados_bancarios:{'pix':2,'dados':1.5,'banc':1.5,'conta':1.3,'agência':1.2,'agencia':1.2,'transfer':1.2,'pagamento':1.0},
+      status:{'status':2,'protocolo':2,'andamento':1.5,'acompanhar':1.5,'atd':1.8},
+      atendente:{'humano':2,'pessoa':1.5,'atendente':2,'falar':1.2,'setor':1.0},
+      tabela_precos:{'preço':2,'precos':2,'valor':2,'tabela':2,'quanto':1.3,'custa':1.3},
+
+      procuracao_publica:{'procuração':2,'procuracao':2},
+      escritura_publica:{'escritura':2},
+      traslados:{'traslado':2,'traslados':2},
+      carta_de_sentenca:{'carta':2,'sentença':2,'sentenca':2},
+      guia_de_itbi:{'itbi':3,'guia':2},
+      testamento:{'testamento':3},
+      ata_notarial:{'ata':3,'notarial':3},
+      apostilamento_de_haia:{'apostilamento':3,'haia':3},
+      e_notariado:{'e-notariado':3,'digital':2},
+
+      nascimento:{'nascimento':3},
+      casamento:{'casamento':3},
+      obito:{'obito':3,'óbito':3},
+      busca_de_registro:{'busca':3,'registro':1.5},
+      '2a_via_de_certidao_breve_relato':{'breve':2,'relato':2},
+      '2a_via_de_certidao_inteiro_teor':{'inteiro':2,'teor':2},
+      livro_e:{'livro':2,'e':1},
+      averbacoes_retificacoes:{'averbação':3,'retificação':3,'averbacao':3,'retificacao':3},
+
+      abertura_de_firma:{'abertura':2,'firma':3},
+      reconhecimento_por_semelhanca:{'semelhança':3,'semelhanca':3},
+      reconhecimento_por_autenticidade:{'autenticidade':3},
+      autenticacao:{'autenticação':3,'autenticacao':3,'cópia':2,'copia':2},
+      materializacao:{'materialização':3,'materializacao':3},
+      autenticacao_digital:{'autenticação':3,'autenticacao':3,'digital':2},
+      desmaterializacao:{'desmaterialização':3,'desmaterializacao':3},
+      sinal_publico:{'sinal':2,'público':2,'publico':2},
+      comunicado_de_venda:{'comunicado':2,'venda':3},
+      autorizacao_de_viagem_eletronica:{'autorização':3,'autorizacao':3,'viagem':2,'eletrônica':1.5},
+
+      certidao_negativa_positiva:{'certidão':2,'negativa':1.5,'positiva':1.5},
+      consulta_cpf_cnpj:{'consulta':2,'cpf':1.5,'cnpj':1.5},
+      realizar_apontamento:{'apontamento':3,'realizar':2},
+      certidao_de_intimacao:{'certidão':2,'intimação':2,'intimacao':2},
+      boleto_em_apontamento:{'boleto':2,'apontamento':2},
+      cancelamento:{'cancelamento':3},
+      carta_de_anuencia:{'anuência':3,'anuencia':3}
     };
-    const locale = 'pt-BR';
+
     function tokenize(text){
       return text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').split(/[^a-z0-9]+/).filter(Boolean);
     }
+
     function score(text){
       const toks = tokenize(text);
       const scores = {};
@@ -139,7 +262,6 @@
             if(tk.startsWith(k)) s += w[key];
           }
         }
-        // bônus para frase inteira contendo palavra importante
         if(text.toLowerCase().includes('dados banc')) s += 0.5;
         scores[intent]=s;
       }
@@ -150,106 +272,430 @@
     return {score};
   })();
 
-  const state = { awaitingSector:false, awaitingDescription:false, chosenSector:null, awaitingStatusId:false };
+  const iaIntentToPayloadMap = {
+    dados_bancarios:'dados_bancarios',
+    status:'status',
+    atendente:'atendente',
+    tabela_precos:'tabela_precos',
 
-  function now(){ return new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
+    procuracao_publica:'procuracao_publica',
+    escritura_publica:'escritura_publica',
+    traslados:'traslados',
+    carta_de_sentenca:'carta_de_sentenca',
+    guia_de_itbi:'guia_de_itbi',
+    testamento:'testamento',
+    ata_notarial:'ata_notarial',
+    apostilamento_de_haia:'apostilamento_de_haia',
+    e_notariado:'e_notariado',
+
+    nascimento:'nascimento',
+    casamento:'casamento',
+    obito:'obito',
+    busca_de_registro:'busca_de_registro',
+    '2a_via_de_certidao_breve_relato':'2a_via_de_certidao_breve_relato',
+    '2a_via_de_certidao_inteiro_teor':'2a_via_de_certidao_inteiro_teor',
+    livro_e:'livro_e',
+    averbacoes_retificacoes:'averbacoes_retificacoes',
+
+    abertura_de_firma:'abertura_de_firma',
+    reconhecimento_por_semelhanca:'reconhecimento_por_semelhanca',
+    reconhecimento_por_autenticidade:'reconhecimento_por_autenticidade',
+    autenticacao:'autenticacao',
+    materializacao:'materializacao',
+    autenticacao_digital:'autenticacao_digital',
+    desmaterializacao:'desmaterializacao',
+    sinal_publico:'sinal_publico',
+    comunicado_de_venda:'comunicado_de_venda',
+    autorizacao_de_viagem_eletronica:'autorizacao_de_viagem_eletronica',
+
+    certidao_negativa_positiva:'certidao_negativa_positiva',
+    consulta_cpf_cnpj:'consulta_cpf_cnpj',
+    realizar_apontamento:'realizar_apontamento',
+    certidao_de_intimacao:'certidao_de_intimacao',
+    boleto_em_apontamento:'boleto_em_apontamento',
+    cancelamento:'cancelamento',
+    carta_de_anuencia:'carta_de_anuencia'
+  };
+
+  // busca serviço por ID
+  function findServiceById(id) {
+    return services.find(s => s.id === id);
+  }
+
+  function formatServiceDetails(service) {
+      if (!service) return 'Serviço não encontrado';
+      let details = `Serviço ${service.nome}\n`;
+      details += `Setor ${service.setor}\n`;
+      details += `Valor ${service.valor_formatado}\n`;
+      details += `Prazo de entrega ${service.prazo_entrega}\n`;
+      details += `Tempo médio de resposta inicial ${service.tempo_medio_resposta}\n`;
+      details += `Horário de atendimento ${service.horario_atendimento}\n`;
+      details += `Pode ser feito 100% online? ${service.pode_ser_online_100 ? 'Sim' : 'Não'}\n`;
+      details += `Forma de pagamento ${service.forma_pagamento}\n`;
+      details += `Responsável Interno ${service.responsavel_interno ? 'Sim' : 'Não'}\n`;
+      details += `Encaminhar para outro órgão? ${service.encaminhar_orgao ? 'Sim' : 'Não'}\n`;
+      if (service.sistema_usado && service.sistema_usado !== 'Não especificado') {
+          details += `Sistema utilizado ${service.sistema_usado}\n`;
+      }
+      details += `\nDocumentos Necessários\n`;
+      if (service.documentos.length > 0) {
+          service.documentos.forEach(doc => { details += `• ${doc}\n`; });
+      } else {
+          details += '• Nenhum documento especificado';
+      }
+      return details;
+  }
+
+  function checklistBlob(service){
+      const text=[
+          `--- Checklist ${service.nome} ---`,
+          `Setor ${service.setor}`,
+          `Valor Estimado ${service.valor_formatado}`,
+          `Prazo Estimado ${service.prazo_entrega}`,
+          `Horário de Atendimento ${service.horario_atendimento}`,
+          `Pode ser feito 100% online? ${service.pode_ser_online_100 ? 'Sim' : 'Não'}`,
+          `Forma de Pagamento ${service.forma_pagamento}`,
+          '',
+          'Documentos Necessários',
+          ...(service.documentos.length > 0 ? service.documentos.map((d,i)=>`${i+1}. ${d}`) : ['Nenhum especificado']),
+          '',
+          'Observações',
+          'Checklist demonstrativo'
+      ].join('\n');
+      return URL.createObjectURL(new Blob([text],{type:'text/plain'}));
+  }
+
+  function showService(serviceId){
+    const service = findServiceById(serviceId);
+    if(!service) { addBubble('Não encontrei informações para este serviço. Tente novamente ou peça atendente','them'); return; }
+    const formattedDetails = formatServiceDetails(service);
+    const bubble = addBubble(formattedDetails,'them');
+    const link = el('span','link-like','Baixar checklist');
+    link.addEventListener('click',()=>{
+        const url=checklistBlob(service);
+        const a=document.createElement('a');
+        a.href=url;
+        a.download=`Checklist - ${slugify(service.nome)}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    });
+    bubble.appendChild(el('div','time',' '));
+    bubble.appendChild(link);
+    addButtons([
+      {label:'Falar com atendente',payload:'atendente',meta:{setor:service.setor,assunto:service.nome}},
+      {label:'Início',payload:'inicio'}
+    ]);
+  }
+
+  function showTabela(){
+      const rows = services.map(s =>
+          `<tr>
+             <td>${s.nome}</td>
+             <td>${s.setor}</td>
+             <td>${s.valor_formatado}</td>
+             <td>${s.prazo_entrega}</td>
+             <td>${s.pode_ser_online_100 ? 'Sim' : 'Não'}</td>
+           </tr>`
+      ).join('');
+      addBubble('Tabela demonstrativa de serviços','them');
+      addBubble(`
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+              <thead>
+                  <tr>
+                      <th style="border:1px solid #2a3a41;padding:6px">Serviço</th>
+                      <th style="border:1px solid #2a3a41;padding:6px">Setor</th>
+                      <th style="border:1px solid #2a3a41;padding:6px">Preço</th>
+                      <th style="border:1px solid #2a3a41;padding:6px">Prazo</th>
+                      <th style="border:1px solid #2a3a41;padding:6px">Online?</th>
+                  </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+          </table>`,'them',true);
+      addButtons([{label:'Início',payload:'inicio'}]);
+  }
+
+  function showBank(){
+      addBubble(`Dados oficiais para pagamento\nBanco ${bank.banco}\nAgência ${bank.agencia}\nConta ${bank.conta}\nTipo ${bank.tipo}\nTitular ${bank.titular}\nCNPJ ${bank.cnpj}\nPix ${bank.pix}`,'them');
+      addBubble(bank.aviso,'them');
+      addButtons([{label:'Copiar Pix',payload:'copiar_pix'},{label:'Início',payload:'inicio'}]);
+  }
+
+  function copyToClipboard(text){
+      navigator.clipboard?.writeText(text).then(()=>addBubble('Chave PIX copiada. Cole no seu aplicativo bancário','them')).catch(()=>addBubble('Falha ao copiar. Copie manualmente','them'));
+  }
+
+  // --- HANDOFF E STATUS ---
+  const state = { awaitingSector:false, awaitingDescription:false, awaitingStatusId:false, chosenSector:null };
+
+  function startHandoff(pref){
+      state.awaitingSector=true; state.chosenSector=null;
+      const intro = pref && pref.assunto ? `Encaminho para o setor de ${pref.setor} com assunto "${pref.assunto}" confirme o setor ou escolha outro` : `Para atendimento humano escolha o setor desejado ou descreva sua demanda`;
+      addBubble(intro,'them');
+      addButtons(setores.map(s => ({label:s, payload:'setor_'+s})).concat([{label:'Cancelar',payload:'inicio'}]));
+  }
+
+  function confirmSector(sector){
+      state.awaitingSector=false; state.awaitingDescription=true; state.chosenSector=sector;
+      addBubble(`Setor "${sector}" selecionado descreva sua demanda em uma frase`,'them');
+  }
+
+  function openTicket(desc){
+      const id='ATD-'+Date.now().toString().slice(-6);
+      const sectorForStore = state.chosenSector;
+      addBubble(`Atendimento iniciado com sucesso\nProtocolo ${id}\nSetor ${sectorForStore}\nResumo ${desc}\nUm atendente vai responder`,'them');
+      state.awaitingDescription=false; state.chosenSector=null;
+      localStorage.setItem(id, JSON.stringify({id, status:'Em análise', sector:sectorForStore, description:desc, requestedAt: new Date().toISOString()}));
+      addButtons([{label:'Verificar Status', payload:'status', meta:{id:id}}, {label:'Início', payload:'inicio'}]);
+  }
+
+  function checkStatusFlow(){
+      state.awaitingStatusId=true;
+      addBubble('Informe o protocolo iniciado com ATD por exemplo ATD-123456 para verificar o status','them');
+  }
+
+  function resolveStatus(id){
+      const raw=localStorage.getItem(id);
+      if(!raw){ addBubble('Protocolo não localizado verifique o número e tente novamente','them'); state.awaitingStatusId=false; return;}
+      const data=JSON.parse(raw);
+
+      const requestedTime = new Date(data.requestedAt);
+      const now = new Date();
+      const diffMinutes = (now - requestedTime) / (1000 * 60);
+
+      let status = 'Em análise';
+      if (diffMinutes < 15) status = 'Em análise';
+      else if (diffMinutes < 60) status = 'Aguardando triagem';
+      else if (diffMinutes < 180) status = 'Em andamento';
+      else status = 'Aguardando resposta final';
+
+      addBubble(`Protocolo ${id}\nSetor ${data.sector}\nStatus ${status}\nDescrição ${data.description}`,'them');
+      state.awaitingStatusId=false;
+      addButtons([{label:'Início',payload:'inicio'}]);
+  }
+
+  // --- CORE ---
+  function handlePayload(payload, meta){
+    if (payload.startsWith('menu_')) {
+        switch (payload) {
+            case 'menu_certidoes': showCertidoesMenu(); break;
+            case 'menu_reconhecimento': showReconhecimentoMenu(); break;
+            case 'menu_autenticacao': showAutenticacaoMenu(); break;
+            case 'menu_procuracoes_escrituras': showProcuracoesEscriturasMenu(); break;
+            case 'menu_protesto': showProtestoMenu(); break;
+            default: addBubble(`Menu desconhecido ${payload}`, 'them');
+        }
+        return;
+    }
+
+    switch (payload) {
+        case 'inicio':
+            addBubble('Como posso ajudar hoje','them');
+            showMainMenu();
+            return;
+        case 'copiar_pix':
+            copyToClipboard(bank.pix);
+            return;
+        case 'atendente':
+            startHandoff(meta);
+            return;
+        case 'status':
+            if (meta && meta.id) { resolveStatus(meta.id); return; }
+            checkStatusFlow();
+            return;
+        case 'dados_bancarios':
+            showBank();
+            return;
+        case 'tabela_precos':
+            showTabela();
+            return;
+    }
+
+    if (payload.startsWith('setor_')) {
+        confirmSector(payload.replace('setor_', ''));
+        return;
+    }
+
+    const service = findServiceById(payload);
+    if (service) { showService(service.id); return; }
+
+    addBubble(`Não entendi o comando ou serviço "${payload}" use os botões ou digite o nome de um serviço`,'them');
+  }
+
+  function iaRoute(text){
+    const result = IA.score(text);
+    if(result.score < 1.8) return null;
+    const mappedPayload = iaIntentToPayloadMap[result.intent];
+    return mappedPayload || null;
+  }
+
+  function parseFreeText(text){
+    const t = text.toLowerCase();
+
+    if(state.awaitingSector && t){
+        const sector = setores.find(s => s.toLowerCase() === t);
+        if(sector){ confirmSector(sector); return; }
+    }
+    if(state.awaitingDescription && t){ openTicket(text); return; }
+    if(state.awaitingStatusId){
+        const id = text.trim().toUpperCase();
+        if(/^ATD-\d{6}$/.test(id)){ resolveStatus(id); return; }
+        addBubble('Formato de protocolo inválido use ATD-123456','them');
+        return;
+    }
+
+    if (t.includes('certidões') || t.includes('registro') || t.includes('nascimento') || t.includes('casamento') || t.includes('óbito')) { handlePayload('menu_certidoes'); return; }
+    if (t.includes('reconhecimento') || t.includes('firma') || t.includes('autenticação') || t.includes('cópia') || t.includes('xerox') || t.includes('materialização') || t.includes('desmaterialização') || t.includes('sinal público') || t.includes('comunicado de venda') || t.includes('autorização de viagem')) { handlePayload('menu_reconhecimento'); return; }
+    if (t.includes('procuração') || t.includes('escritura') || t.includes('imóvel') || t.includes('venda') || t.includes('compra') || t.includes('traslado') || t.includes('itbi') || t.includes('testamento') || t.includes('ata notarial') || t.includes('haia') || t.includes('e-notariado')) { handlePayload('menu_procuracoes_escrituras'); return; }
+    if (t.includes('protesto') || t.includes('apontamento') || t.includes('anuência') || t.includes('boleto')) { handlePayload('menu_protesto'); return; }
+
+    const directServiceMatch = services.find(s =>
+        s.id.toLowerCase() === t ||
+        s.nome.toLowerCase().includes(t) ||
+        s.nome.toLowerCase().split(' ').some(word => t.includes(word))
+    );
+    if (directServiceMatch) { handlePayload(directServiceMatch.id); return; }
+
+    if(aiToggle.checked){
+      const iaPayload = iaRoute(text);
+      if(iaPayload){ handlePayload(iaPayload); return; }
+    }
+
+    if(t.includes('atendente') || t.includes('humano') || t.includes('falar com')) { handlePayload('atendente'); return; }
+    if(t.includes('dados banc') || t.includes('pix') || t.includes('conta')) { handlePayload('dados_bancarios'); return; }
+    if(t.includes('tabela') || t.includes('preço') || t.includes('valor') || t.includes('quanto custa')) { handlePayload('tabela_precos'); return; }
+
+    addBubble('Não entendi use os botões ou digite o nome do serviço por exemplo Nascimento ou Procuração ou digite atendente para falar com um humano','them');
+  }
+
+  // --- UI ---
+  function showMainMenu(){
+      addButtons([
+          {label:'Certidões e Registros', payload:'menu_certidoes'},
+          {label:'Reconhecimento de Firma', payload:'menu_reconhecimento'},
+          {label:'Autenticação de Cópia', payload:'menu_autenticacao'},
+          {label:'Procurações e Escrituras', payload:'menu_procuracoes_escrituras'},
+          {label:'Protesto', payload:'menu_protesto'},
+          {label:'Tabela de Preços Completa', payload:'tabela_precos'},
+          {label:'Dados Bancários/PIX', payload:'dados_bancarios'},
+          {label:'Falar com Atendente', payload:'atendente'}
+      ]);
+  }
+
+  function showCertidoesMenu(){
+      addButtons([
+          {label:'Nascimento', payload:'nascimento'},
+          {label:'Casamento', payload:'casamento'},
+          {label:'Óbito', payload:'obito'},
+          {label:'Busca de Registro', payload:'busca_de_registro'},
+          {label:'2ª Via Breve Relato', payload:'2a_via_de_certidao_breve_relato'},
+          {label:'2ª Via Inteiro Teor', payload:'2a_via_de_certidao_inteiro_teor'},
+          {label:'Livro E', payload:'livro_e'},
+          {label:'Averbações e Retificações', payload:'averbacoes_retificacoes'},
+          {label:'Voltar', payload:'inicio'}
+      ]);
+  }
+
+  function showReconhecimentoMenu(){
+      addButtons([
+          {label:'Abertura de Firma', payload:'abertura_de_firma'},
+          {label:'Reconhecimento por Semelhança', payload:'reconhecimento_por_semelhanca'},
+          {label:'Reconhecimento por Autenticidade', payload:'reconhecimento_por_autenticidade'},
+          {label:'Autenticação de Cópia', payload:'autenticacao'},
+          {label:'Materialização', payload:'materializacao'},
+          {label:'Autenticação Digital', payload:'autenticacao_digital'},
+          {label:'Desmaterialização', payload:'desmaterializacao'},
+          {label:'Sinal Público', payload:'sinal_publico'},
+          {label:'Comunicado de Venda', payload:'comunicado_de_venda'},
+          {label:'Autorização de Viagem Eletrônica', payload:'autorizacao_de_viagem_eletronica'},
+          {label:'Voltar', payload:'inicio'}
+      ]);
+  }
+
+  function showAutenticacaoMenu() {
+      addBubble('Para autenticação de cópias escolha uma opção','them');
+      showReconhecimentoMenu();
+  }
+
+  function showProcuracoesEscriturasMenu(){
+      addButtons([
+          {label:'Procuração Pública', payload:'procuracao_publica'},
+          {label:'Escritura Pública', payload:'escritura_publica'},
+          {label:'Traslados', payload:'traslados'},
+          {label:'Carta de Sentença', payload:'carta_de_sentenca'},
+          {label:'Guia de ITBI', payload:'guia_de_itbi'},
+          {label:'Testamento', payload:'testamento'},
+          {label:'Ata Notarial', payload:'ata_notarial'},
+          {label:'Apostilamento de Haia', payload:'apostilamento_de_haia'},
+          {label:'E-Notariado', payload:'e_notariado'},
+          {label:'Voltar', payload:'inicio'}
+      ]);
+  }
+
+  function showProtestoMenu(){
+      addButtons([
+          {label:'Certidão Negativa ou Positiva', payload:'certidao_negativa_positiva'},
+          {label:'Consulta CPF ou CNPJ', payload:'consulta_cpf_cnpj'},
+          {label:'Realizar Apontamento', payload:'realizar_apontamento'},
+          {label:'Certidão de Intimação', payload:'certidao_de_intimacao'},
+          {label:'Boleto em Apontamento', payload:'boleto_em_apontamento'},
+          {label:'Cancelamento de Protesto', payload:'cancelamento'},
+          {label:'Carta de Anuência', payload:'carta_de_anuencia'},
+          {label:'Voltar', payload:'inicio'}
+      ]);
+  }
+
+  // --- DOM ---
   function el(tag, cls, html){ const e=document.createElement(tag); if(cls) e.className=cls; if(html!==undefined) e.innerHTML=html; return e; }
   function addBubble(text, who='them', html=false){
     const b = el('div','bubble '+who);
     b[html?'innerHTML':'textContent']=text;
     const t = el('span','time', now()); b.appendChild(t);
-    chat.appendChild(b); chat.scrollTop = chat.scrollHeight; return b;
+    chat.appendChild(b);
+    chat.scrollTop = chat.scrollHeight;
+    return b;
   }
   function addButtons(buttons){
     const wrap = el('div','buttons');
-    buttons.forEach(btn=>{ const b=el('button','',btn.label); b.addEventListener('click',()=>handlePayload(btn.payload, btn.meta)); wrap.appendChild(b); });
-    const bubble = el('div','bubble them'); bubble.appendChild(wrap); chat.appendChild(bubble); chat.scrollTop = chat.scrollHeight;
+    buttons.forEach(btn=>{
+        const b=el('button','',btn.label);
+        b.addEventListener('click',()=>{
+            addBubble(btn.label, 'me');
+            handlePayload(btn.payload, btn.meta);
+        });
+        wrap.appendChild(b);
+    });
+    const bubble = el('div','bubble them');
+    bubble.appendChild(wrap);
+    chat.appendChild(bubble);
+    chat.scrollTop = chat.scrollHeight;
   }
-  function greet(){ addBubble('Bem-vindo. Posso informar preços, prazos e documentos, gerar checklist e direcionar para o setor. Digite por exemplo casamento, nascimento, preço, dados bancários, atendente.'); showMain(); }
-  function showMain(){ addButtons([{label:'Certidões',payload:'menu_certidoes'},{label:'Reconhecimento de firma',payload:'serv_reconhecimento'},{label:'Autenticação de cópia',payload:'serv_autenticacao'},{label:'Procuração pública',payload:'serv_procuracao_publica'},{label:'Escrituras',payload:'menu_escrituras'},{label:'Apostila de Haia',payload:'serv_apostila'},{label:'Tabela de preços',payload:'tabela_precos'},{label:'Dados bancários',payload:'dados_bancarios'},{label:'Falar com atendente',payload:'atendente'},{label:'Status de pedido',payload:'status'}]); }
-  function showCertidoes(){ addButtons([{label:'Nascimento',payload:'serv_certidao_nascimento'},{label:'Casamento',payload:'serv_certidao_casamento'},{label:'Óbito',payload:'serv_certidao_obito'},{label:'Inteiro teor',payload:'serv_inteiro_teor'},{label:'Voltar',payload:'inicio'}]); }
-  function showEscrituras(){ addButtons([{label:'Compra e venda',payload:'serv_escritura_compra_venda'},{label:'União estável',payload:'serv_uniao_estavel'},{label:'Voltar',payload:'inicio'}]); }
-  function findServiceByKey(key){ return services.find(s=>s.id===key); }
-  function formatService(s){ const docsList = s.docs.map(d=>'• '+d).join('\n'); return `${s.nome}\nPreço ${s.preco}\nPrazo ${s.prazo}\nSetor ${s.setor}\nDocumentos\n${docsList}\n\nDeseja receber um checklist`; }
-  function checklistBlob(svc){ const text=[`Checklist ${svc.nome}`,`Setor ${svc.setor}`,`Preço ${svc.preco}`,`Prazo ${svc.prazo}`,'','Documentos',...svc.docs.map((d,i)=>`${i+1}. ${d}`),'','Observação Este arquivo é para demonstração.'].join('\n'); return URL.createObjectURL(new Blob([text],{type:'text/plain'})); }
-  function showService(key){
-    const svc = findServiceByKey(key); if(!svc) return;
-    const b = addBubble(formatService(svc),'them');
-    const link = el('span','link-like','Baixar checklist');
-    link.addEventListener('click',()=>{ const url=checklistBlob(svc); const a=document.createElement('a'); a.href=url; a.download=`Checklist - ${svc.nome}.txt`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); });
-    b.appendChild(el('div','time',' ')); b.appendChild(link);
-    addButtons([{label:'Falar com atendente',payload:'atendente',meta:{setor:svc.setor,assunto:svc.nome}},{label:'Início',payload:'inicio'}]);
+  function now(){ return new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
+
+  // --- INIT ---
+  function greet(){
+      addBubble('Olá bem-vindo ao assistente virtual do Cartório','them');
+      addBubble('Posso informar serviços valores prazos documentos e status você pode digitar o nome do serviço direto','them');
+      showMainMenu();
   }
-  function showTabela(){ const rows=services.map(s=>`<tr><td>${s.nome}</td><td>${s.setor}</td><td>${s.preco}</td><td>${s.prazo}</td></tr>`).join(''); addBubble('Tabela demonstrativa','them'); addBubble(`<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="border:1px solid #2a3a41;padding:6px">Serviço</th><th style="border:1px solid #2a3a41;padding:6px">Setor</th><th style="border:1px solid #2a3a41;padding:6px">Preço</th><th style="border:1px solid #2a3a41;padding:6px">Prazo</th></tr></thead><tbody>${rows}</tbody></table>`,'them',true); addButtons([{label:'Início',payload:'inicio'}]); }
-  function showBank(){ addBubble(`Dados oficiais para pagamento\nBanco ${bank.banco}\nAgência ${bank.agencia}\nConta ${bank.conta}\n${bank.tipo}\nTitular ${bank.titular}\nCNPJ ${bank.cnpj}\nPix ${bank.pix}`,'them'); addBubble(bank.aviso,'them'); addButtons([{label:'Copiar Pix',payload:'copiar_pix'},{label:'Início',payload:'inicio'}]); }
-  function copyToClipboard(text){ navigator.clipboard?.writeText(text).then(()=>addBubble('Pix copiado','them')).catch(()=>addBubble('Selecione e copie manualmente','them')); }
-  function startHandoff(pref){ state.awaitingSector=true; state.chosenSector=null; const intro = pref && pref.assunto ? `Encaminho para ${pref.setor} com assunto ${pref.assunto}. Confirme o setor ou escolha outro.` : `Escolha o setor para atendimento humano.`; addBubble(intro,'them'); addButtons(setores.map(s=>({label:s,payload:'setor_'+s})).concat([{label:'Cancelar',payload:'inicio'}])); }
-  function confirmSector(sector){ state.awaitingSector=false; state.awaitingDescription=true; state.chosenSector=sector; addBubble(`Setor ${sector} selecionado. Descreva a demanda em uma frase.`,'them'); }
-  function openTicket(desc){ const id='ATD-'+Date.now().toString().slice(-6); addBubble(`Atendimento aberto\nProtocolo ${id}\nSetor ${state.chosenSector}\nResumo ${desc}`,'them'); state.awaitingDescription=false; state.chosenSector=null; localStorage.setItem(id, JSON.stringify({id,status:'Em análise',at:new Date().toISOString()})); addButtons([{label:'Status de pedido',payload:'status',meta:{id}},{label:'Início',payload:'inicio'}]); }
-  function checkStatusFlow(){ state.awaitingStatusId=true; addBubble('Informe o protocolo iniciado com ATD','them'); }
-  function resolveStatus(id){ const raw=localStorage.getItem(id); if(!raw){ addBubble('Protocolo não localizado','them'); return;} const data=JSON.parse(raw); const statuses=['Em análise','Aguardando documentos','Em execução','Concluído']; const idx=Math.floor(((Date.now()-new Date(data.at).getTime())/60000)%statuses.length); addBubble(`Protocolo ${id}\nStatus ${statuses[idx]}`,'them'); state.awaitingStatusId=false; addButtons([{label:'Início',payload:'inicio'}]); }
+  setTimeout(greet, 250);
 
-  function handlePayload(payload, meta){
-    if(payload==='inicio'){ addBubble('Início do atendimento','them'); showMain(); return; }
-    if(payload==='menu_certidoes'){ showCertidoes(); return; }
-    if(payload==='menu_escrituras'){ showEscrituras(); return; }
-    if(payload==='tabela_precos'){ showTabela(); return; }
-    if(payload==='dados_bancarios'){ showBank(); return; }
-    if(payload==='copiar_pix'){ copyToClipboard(bank.pix); return; }
-    if(payload==='atendente'){ startHandoff(meta); return; }
-    if(/^setor_/.test(payload)){ confirmSector(payload.replace('setor_','')); return; }
-    const map={'serv_certidao_nascimento':'certidao_nascimento','serv_certidao_casamento':'certidao_casamento','serv_certidao_obito':'certidao_obito','serv_inteiro_teor':'inteiro_teor','serv_reconhecimento':'reconhecimento','serv_autenticacao':'autenticacao','serv_procuracao_publica':'procuracao_publica','serv_escritura_compra_venda':'escritura_compra_venda','serv_uniao_estavel':'uniao_estavel','serv_apostila':'apostila'};
-    if(map[payload]){ showService(map[payload]); return; }
-    if(payload==='status'){ checkStatusFlow(); return; }
-  }
-
-  function iaRoute(text){
-    const res = IA.score(text);
-    // limiar de confiança simples
-    if(res.score < 1.8) return null;
-    const map = {
-      'dados_bancarios':'dados_bancarios',
-      'status':'status',
-      'atendente':'atendente',
-      'tabela_precos':'tabela_precos',
-      'certidao_nascimento':'serv_certidao_nascimento',
-      'certidao_casamento':'serv_certidao_casamento',
-      'certidao_obito':'serv_certidao_obito',
-      'inteiro_teor':'serv_inteiro_teor',
-      'reconhecimento':'serv_reconhecimento',
-      'autenticacao':'serv_autenticacao',
-      'procuracao_publica':'serv_procuracao_publica',
-      'escritura_compra_venda':'serv_escritura_compra_venda',
-      'uniao_estavel':'serv_uniao_estavel',
-      'apostila':'serv_apostila',
-      'protesto_cancelamento':'serv_protesto_cancelamento',
-      'rtd_notificacao':'serv_rtd_notificacao'
-    };
-    return map[res.intent] || null;
-  }
-
-  function parseFreeText(text){
-    const t = text.toLowerCase();
-    if(state.awaitingSector && t){ const sector = setores.find(s=>s.toLowerCase()===t); if(sector){ confirmSector(sector); return; } }
-    if(state.awaitingDescription && t){ openTicket(text); return; }
-    if(state.awaitingStatusId){ const id = text.trim().toUpperCase(); if(/^ATD-\d{6}$/.test(id)){ resolveStatus(id); return; } addBubble('Formato inválido. Use ATD-123456','them'); return; }
-
-    if(aiToggle.checked){
-      const route = iaRoute(text);
-      if(route){ handlePayload(route); return; }
-    }
-
-    if(t.includes('atendente') || t.includes('humano') || t.includes('pessoa')){ startHandoff(); return; }
-    if(t.includes('dados banc') || t.includes('pix') || t.includes('conta')){ showBank(); return; }
-    if(t.includes('tabela') || t.includes('preço') || t.includes('preco') || t.includes('valor')){ showTabela(); return; }
-
-    addBubble('Não entendi. Use os botões ou ative IA e digite serviço, preço, documentos, dados bancários ou atendente.','them');
-  }
-
-  sendBtn.addEventListener('click',()=>{ const val=input.value.trim(); if(!val) return; addBubble(val,'me'); input.value=''; setTimeout(()=>parseFreeText(val), 120); });
-  input.addEventListener('keydown',e=>{ if(e.key==='Enter'){ sendBtn.click(); } });
-  fileInp.addEventListener('change',e=>{ if(!e.target.files.length) return; addBubble(`${e.target.files.length} arquivo(s) recebidos. Serão analisados após abertura de atendimento.`,'them'); });
-  setTimeout(()=>{ addBubble('Bem-vindo. Posso informar preços, prazos e documentos, gerar checklist e direcionar para o setor.'); showMain(); }, 250);
+  sendBtn.addEventListener('click',()=>{
+      const val = input.value.trim();
+      if(!val) return;
+      addBubble(val,'me');
+      input.value='';
+      setTimeout(()=>parseFreeText(val), 120);
+  });
+  input.addEventListener('keydown',e=>{
+      if(e.key==='Enter'){ sendBtn.click(); }
+  });
+  fileInp.addEventListener('change',e=>{
+      if(!e.target.files.length) return;
+      addBubble(`${e.target.files.length} arquivo(s) recebidos descreva sua solicitação para análise dos anexos`,'them');
+      e.target.value = null;
+  });
 })();
 </script>
 </body>
