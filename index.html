@@ -529,6 +529,44 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
     const mappedPayload = iaIntentToPayloadMap[result.intent];
     return mappedPayload || null;
   }
+function parseFreeText(text){
+  const t = text.toLowerCase();
+
+  if(state.awaitingSector && t){
+      const sector = setores.find(s => s.toLowerCase() === t);
+      if(sector){ confirmSector(sector); return; }
+  }
+  if(state.awaitingDescription && t){ openTicket(text); return; }
+  if(state.awaitingStatusId){
+      const id = text.trim().toUpperCase();
+      if(/^ATD-\d{6}$/.test(id)){ resolveStatus(id); return; }
+      addBubble('Formato de protocolo inválido use ATD-123456','them');
+      return;
+  }
+
+  if (t.includes('certidões') || t.includes('registro') || t.includes('nascimento') || t.includes('casamento') || t.includes('óbito')) { handlePayload('menu_certidoes'); return; }
+  if (t.includes('reconhecimento') || t.includes('firma') || t.includes('autenticação') || t.includes('cópia') || t.includes('xerox') || t.includes('materialização') || t.includes('desmaterialização') || t.includes('sinal público') || t.includes('comunicado de venda') || t.includes('autorização de viagem')) { handlePayload('menu_reconhecimento'); return; }
+  if (t.includes('procuração') || t.includes('escritura') || t.includes('imóvel') || t.includes('venda') || t.includes('compra') || t.includes('traslado') || t.includes('itbi') || t.includes('testamento') || t.includes('ata notarial') || t.includes('haia') || t.includes('e-notariado')) { handlePayload('menu_procuracoes_escrituras'); return; }
+  if (t.includes('protesto') || t.includes('apontamento') || t.includes('anuência') || t.includes('boleto')) { handlePayload('menu_protesto'); return; }
+
+  const directServiceMatch = services.find(s =>
+      s.id.toLowerCase() === t ||
+      s.nome.toLowerCase().includes(t) ||
+      s.nome.toLowerCase().split(' ').some(word => t.includes(word))
+  );
+  if (directServiceMatch) { handlePayload(directServiceMatch.id); return; }
+
+  if(aiToggle.checked){
+    const iaPayload = iaRoute(text);
+    if(iaPayload){ handlePayload(iaPayload); return; }
+  }
+
+  if(t.includes('atendente') || t.includes('humano') || t.includes('falar com')) { handlePayload('atendente'); return; }
+  if(t.includes('dados banc') || t.includes('pix') || t.includes('conta')) { handlePayload('dados_bancarios'); return; }
+  if(t.includes('tabela') || t.includes('preço') || t.includes('valor') || t.includes('quanto custa')) { handlePayload('tabela_precos'); return; }
+
+  routeFreeText(text);
+}
 
   function parseFreeText(text){
     const t = text.toLowerCase();
