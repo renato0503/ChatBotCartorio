@@ -49,6 +49,36 @@
   .foot{text-align:center;font-size:11px;color:var(--sub);padding:6px 10px;border-top:1px dashed #23313a}
   .toggle{margin-left:auto;font-size:12px;display:flex;gap:8px;align-items:center}
   .toggle input{transform:scale(1.1)}
+  /* New styles for schedule grid */
+  .schedule-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .schedule-slot {
+    background-color: var(--btn);
+    color: var(--text);
+    border: 1px solid #2c3c43;
+    border-radius: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    text-align: center;
+    transition: background-color 0.2s ease;
+  }
+  .schedule-slot.occupied {
+    background-color: #3a4a53;
+    color: var(--sub);
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+  .schedule-slot.available {
+      border-color: var(--accent);
+  }
+  .schedule-slot:not(.occupied):hover {
+      background-color: #2a3a43;
+  }
 </style>
 </head>
 <body>
@@ -80,6 +110,23 @@
   const sendBtn = document.getElementById('send');
   const fileInp = document.getElementById('file');
   const aiToggle = document.getElementById('ai');
+
+  // --- Estado e Configurações ---
+  const state = {
+      awaitingSector: false,
+      awaitingDescription: false,
+      awaitingStatusId: false,
+      awaitingOrderCPF: false, // For video call scheduling input phase
+      chosenSector: null,
+      currentOrderCode: null,
+      currentCPF: null,
+      videoCallSchedule: {}, // Stores current day's slot availability: { '09:00-09:30': 'available' | 'occupied' }
+      videoCallBookedSlots: {} // Stores booking details: { '09:00-09:30': { orderCode: 'ATD-XXXXXX', cpf: 'XXXXXXXXXXX' } }
+  };
+
+  const CPF_REGEX = /^\d{11}$/;
+  const ORDER_CODE_REGEX = /^ATD-\d{6}$/;
+  const VIDEO_CALL_PDF_URL = 'https://corregedoria-mc.tjmt.jus.br/corregedoria-arquivos-prod/cms/Provimento_n_49_2024_CGJ_Rep_83bd1305fc.pdf';
 
   // --- HELPERS ---
   function slugify(text) {
@@ -120,7 +167,12 @@
     return value.trim().replace(/\s+/g,' ');
   }
 
-  // --- CSV atualizado ---
+  function formatList(items) {
+      if (!items || items.length === 0) return '- Nenhum especificado';
+      return items.map(item => `• ${item}`).join('\n');
+  }
+
+  // --- Data: CSV & Specific Services ---
   const csvData = `Tabelionato de Notas	Procuração Pública	 R$ 120,00 	Sim	WhatsApp	1 dia útil 	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	1 dia útil
 Tabelionato de Notas	Escritura Pública	 Valor a ser calculado 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
 Tabelionato de Notas	Traslados	 R$ 51,50 	Sim	WhatsApp	5 dias úteis	09:00 as 17:00	Sim	Anexo	Não	Online Engenharia de Sistemas	Débito ou Pix	5 dias úteis
@@ -159,7 +211,8 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
   const serviceLines = csvData.trim().split('\n');
   const headers = ['setor','servico','valor_bruto','responsavel_interno','canal_abertura','tempo_medio_resposta','horario_atendimento','pode_ser_online_100','documentos_necessarios','encaminhar_orgao','sistema_usado','forma_pagamento','prazo_entrega'];
 
-  const services = serviceLines.map(line => {
+  // Process CSV data
+  const csvServices = serviceLines.map(line => {
       const values = line.split('\t');
       const serviceData = {};
       headers.forEach((header, index) => { serviceData[header] = values[index] ? values[index].trim() : ''; });
@@ -186,27 +239,85 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
       };
   });
 
+  // Define specific services not directly from CSV
+  const specificServices = [
+      // Reconhecimento de Firma Items
+      { id: 'rec_firma_abertura', nome: 'Abertura de Firma', setor: 'Reconhecimento de Firma', docs_text: 'RG ou CNH original e CPF.' },
+      { id: 'rec_firma_semelhanca', nome: 'Reconhecimento por Semelhança', setor: 'Reconhecimento de Firma', docs_text: 'Documento já com firma aberta no cartório.' },
+      { id: 'rec_firma_autenticidade', nome: 'Reconhecimento por Autenticidade', setor: 'Reconhecimento de Firma', docs_text: 'Documento original mais presença do titular com documento oficial (RG ou CNH).' },
+      { id: 'rec_firma_autenticacao_copia', nome: 'Autenticação de Cópias', setor: 'Reconhecimento de Firma', docs_text: 'Documento original mais cópia simples.' },
+      { id: 'rec_firma_materializacao', nome: 'Materialização', setor: 'Reconhecimento de Firma', docs_text: 'Documento digital em PDF.' },
+      { id: 'rec_firma_autenticacao_digital', nome: 'Autenticação Digital', setor: 'Reconhecimento de Firma', docs_text: 'Documento digital em PDF.' },
+      { id: 'rec_firma_desmaterializacao', nome: 'Desmaterialização', setor: 'Reconhecimento de Firma', docs_text: 'Documento físico original.' },
+      { id: 'rec_firma_sinal_publico', nome: 'Sinal Público', setor: 'Reconhecimento de Firma', docs_text: 'Documento com assinatura de tabelião ou registrador.' },
+      { id: 'rec_firma_comunicado_venda', nome: 'Comunicado de Venda', setor: 'Reconhecimento de Firma', docs_text: 'CRV (recibo do veículo) ou equivalente mais documento do vendedor.' },
+      { id: 'rec_firma_autorizacao_viagem', nome: 'Autorização de Viagem Eletrônica', setor: 'Reconhecimento de Firma', docs_text: 'Documentos pessoais dos pais ou responsáveis mais dados do menor mais certidão de nascimento.' },
+
+      // Registro Civil Items
+      { id: 'reg_civil_nascimento', nome: 'Nascimento', setor: 'Registro Civil', docs_text: 'DNV mais documentos dos pais (RG, CPF).' },
+      { id: 'reg_civil_casamento', nome: 'Casamento', setor: 'Registro Civil', docs_text: 'RG, CPF, certidão de nascimento atualizada dos noivos, comprovante de residência, mais duas testemunhas com documento pessoal.' },
+      { id: 'reg_civil_obito', nome: 'Óbito', setor: 'Registro Civil', docs_text: 'Declaração de Óbito (DO), documentos do falecido e do declarante.' },
+      { id: 'reg_civil_busca', nome: 'Busca de Registro', setor: 'Registro Civil', docs_text: 'Nome completo, data aproximada do registro e filiação.' },
+      { id: 'reg_civil_2via_breve', nome: '2ª Via de Certidão (Breve Relato)', setor: 'Registro Civil', docs_text: 'Dados completos do registro e documento pessoal do solicitante.' },
+      { id: 'reg_civil_2via_inteiro', nome: '2ª Via de Certidão (Inteiro Teor)', setor: 'Registro Civil', docs_text: 'Dados completos do registro.' },
+      { id: 'reg_civil_livro_e', nome: 'Livro E', setor: 'Registro Civil', docs_text: 'Documento judicial ou religioso conforme o caso.' },
+      { id: 'reg_civil_averbacoes', nome: 'Averbações / Retificações', setor: 'Registro Civil', docs_text: 'Documento judicial ou administrativo que determina a alteração.' },
+
+      // Tabelionato de Notas Items
+      { id: 'tab_notas_procuracao', nome: 'Procuração Pública', setor: 'Tabelionato de Notas', docs_text: 'RG, CPF e dados do outorgante e outorgado.' },
+      { id: 'tab_notas_escritura', nome: 'Escritura Pública', setor: 'Tabelionato de Notas', docs_text: 'Documentos pessoais e documentos do imóvel quando aplicável.' },
+      { id: 'tab_notas_traslados', nome: 'Traslados', setor: 'Tabelionato de Notas', docs_text: 'Informar qual escritura deseja traslado.' },
+      { id: 'tab_notas_carta_sentenca', nome: 'Carta de Sentença', setor: 'Tabelionato de Notas', docs_text: 'Processo com decisão transitada em julgado.' },
+      { id: 'tab_notas_itbi', nome: 'Guia de ITBI', setor: 'Tabelionato de Notas', docs_text: 'Informações do imóvel e guia emitida pela prefeitura.' },
+      { id: 'tab_notas_testamento', nome: 'Testamento', setor: 'Tabelionato de Notas', docs_text: 'Documento de identidade do testador.' },
+      { id: 'tab_notas_ata_notarial', nome: 'Ata Notarial', setor: 'Tabelionato de Notas', docs_text: 'Documento, fato ou situação a ser atestada.' },
+      { id: 'tab_notas_apostilamento_haia', nome: 'Apostilamento de Haia', setor: 'Tabelionato de Notas', docs_text: 'Documento original a apostilar.' },
+      { id: 'tab_notas_e_notariado', nome: 'E-Notariado', setor: 'Tabelionato de Notas', docs_text: 'Documento original.' },
+  ];
+
+  // Combine CSV services with specific ones for a unified list
+  const allServices = [...csvServices, ...specificServices.map(s => ({
+      ...s,
+      // Default values for fields not present in specificServices but needed for consistency
+      valor_formatado: 'Verificar no cartório',
+      responsavel_interno: false,
+      canal_abertura: 'Presencial ou Virtual',
+      tempo_medio_resposta: 'Variável',
+      horario_atendimento: '09:00 as 17:00',
+      pode_ser_online_100: true,
+      documentos: s.docs_text ? s.docs_text.split('.') : ['Não especificado'],
+      encaminhar_orgao: false,
+      sistema_usado: 'Sistema Interno',
+      forma_pagamento: 'PIX ou Débito',
+      prazo_entrega: 'Variável'
+  }))];
+
   const setores = ['Tabelionato de Notas','Registro Civil','Reconhecimento de Firma','Protesto','Financeiro','Atendimento Geral','Ouvidoria'];
 
-  const bank = {
-    banco:'Banco Modelo S.A.',
-    agencia:'0001',
-    conta:'12345-6',
-    tipo:'Conta Corrente',
-    titular:'Cartório Modelo de Notas e Registro',
-    cnpj:'12.345.678/0001-99',
-    pix:'12345678000199',
-    aviso:'Use somente estes dados. O cartório não envia mensagens por números diferentes nem solicita pagamento por links aleatórios.'
+  // Bank Information as requested
+  const bankInfo = {
+    razSocial: 'Oficial do Registro Civil das Pessoas Naturais com funções notariais.',
+    nomeFantasia: 'Cartório Coxipó do Ouro',
+    cnpj: '41.567.424/0001-10',
+    banco: 'Banco do Brasil',
+    agencia: '3940-3',
+    conta: '53874-4',
+    tipo: 'Conta Corrente',
+    pix: '41.567.424/0001-10',
+    aviso: 'Use somente estes dados. O cartório não envia mensagens por números diferentes nem solicita pagamento por links aleatórios.'
   };
 
-  // --- IA atualizada ---
+  // --- IA Logic ---
   const IA = (function(){
     const intents = {
+      // Existing intents...
       dados_bancarios:{'pix':2,'dados':1.5,'banc':1.5,'conta':1.3,'agência':1.2,'agencia':1.2,'transfer':1.2,'pagamento':1.0},
       status:{'status':2,'protocolo':2,'andamento':1.5,'acompanhar':1.5,'atd':1.8},
       atendente:{'humano':2,'pessoa':1.5,'atendente':2,'falar':1.2,'setor':1.0},
       tabela_precos:{'preço':2,'precos':2,'valor':2,'tabela':2,'quanto':1.3,'custa':1.3},
+      tabela_emolumentos:{'emolumentos':3, 'provimento': 2}, // Added for PDF link detection
 
+      // Mapped payloads for new specific services
       procuracao_publica:{'procuração':2,'procuracao':2},
       escritura_publica:{'escritura':2},
       traslados:{'traslado':2,'traslados':2},
@@ -227,7 +338,7 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
       averbacoes_retificacoes:{'averbação':3,'retificação':3,'averbacao':3,'retificacao':3},
 
       abertura_de_firma:{'abertura':2,'firma':3},
-      reconhecimento_por_semelhanca:{'semelhança':3,'semelhanca':3},
+      reconhecimento_por_semelhança:{'semelhança':3,'semelhanca':3},
       reconhecimento_por_autenticidade:{'autenticidade':3},
       autenticacao:{'autenticação':3,'autenticacao':3,'cópia':2,'copia':2},
       materializacao:{'materialização':3,'materializacao':3},
@@ -262,7 +373,11 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
             if(tk.startsWith(k)) s += w[key];
           }
         }
-        if(text.toLowerCase().includes('dados banc')) s += 0.5;
+        // Specific keyword boosts
+        if (intent === 'dados_bancarios' && text.toLowerCase().includes('dados banc')) s += 0.5;
+        if (intent === 'tabela_emolumentos' && text.toLowerCase().includes('emolumentos')) s += 1.0;
+        if (intent === 'tabela_precos' && text.toLowerCase().includes('tabela')) s += 0.5;
+
         scores[intent]=s;
       }
       let best = {intent:'',score:0};
@@ -272,73 +387,73 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
     return {score};
   })();
 
+  // Mapping detected IA intents to specific payloads
   const iaIntentToPayloadMap = {
     dados_bancarios:'dados_bancarios',
-    status:'status',
+    status:'status_query', // Use dedicated query payload
     atendente:'atendente',
     tabela_precos:'tabela_precos',
+    tabela_emolumentos:'tabela_emolumentos_pdf', // Payload for official PDF
 
-    procuracao_publica:'procuracao_publica',
-    escritura_publica:'escritura_publica',
-    traslados:'traslados',
-    carta_de_sentenca:'carta_de_sentenca',
-    guia_de_itbi:'guia_de_itbi',
-    testamento:'testamento',
-    ata_notarial:'ata_notarial',
-    apostilamento_de_haia:'apostilamento_de_haia',
-    e_notariado:'e_notariado',
+    // Mappings for specific services
+    procuracao_publica:'tab_notas_procuracao',
+    escritura_publica:'tab_notas_escritura',
+    traslados:'tab_notas_traslados',
+    carta_de_sentenca:'tab_notas_carta_sentenca',
+    guia_de_itbi:'tab_notas_itbi',
+    testamento:'tab_notas_testamento',
+    ata_notarial:'tab_notas_ata_notarial',
+    apostilamento_de_haia:'tab_notas_apostilamento_haia',
+    e_notariado:'tab_notas_e_notariado',
 
-    nascimento:'nascimento',
-    casamento:'casamento',
-    obito:'obito',
-    busca_de_registro:'busca_de_registro',
-    '2a_via_de_certidao_breve_relato':'2a_via_de_certidao_breve_relato',
-    '2a_via_de_certidao_inteiro_teor':'2a_via_de_certidao_inteiro_teor',
-    livro_e:'livro_e',
-    averbacoes_retificacoes:'averbacoes_retificacoes',
+    nascimento:'reg_civil_nascimento',
+    casamento:'reg_civil_casamento',
+    obito:'reg_civil_obito',
+    busca_de_registro:'reg_civil_busca',
+    '2a_via_de_certidao_breve_relato':'reg_civil_2via_breve',
+    '2a_via_de_certidao_inteiro_teor':'reg_civil_2via_inteiro',
+    livro_e:'reg_civil_livro_e',
+    averbacoes_retificacoes:'reg_civil_averbacoes',
 
-    abertura_de_firma:'abertura_de_firma',
-    reconhecimento_por_semelhanca:'reconhecimento_por_semelhanca',
-    reconhecimento_por_autenticidade:'reconhecimento_por_autenticidade',
-    autenticacao:'autenticacao',
-    materializacao:'materializacao',
-    autenticacao_digital:'autenticacao_digital',
-    desmaterializacao:'desmaterializacao',
-    sinal_publico:'sinal_publico',
-    comunicado_de_venda:'comunicado_de_venda',
-    autorizacao_de_viagem_eletronica:'autorizacao_de_viagem_eletronica',
-
-    certidao_negativa_positiva:'certidao_negativa_positiva',
-    consulta_cpf_cnpj:'consulta_cpf_cnpj',
-    realizar_apontamento:'realizar_apontamento',
-    certidao_de_intimacao:'certidao_de_intimacao',
-    boleto_em_apontamento:'boleto_em_apontamento',
-    cancelamento:'cancelamento',
-    carta_de_anuencia:'carta_de_anuencia'
+    abertura_de_firma:'rec_firma_abertura',
+    reconhecimento_por_semelhança:'rec_firma_semelhanca',
+    reconhecimento_por_autenticidade:'rec_firma_autenticidade',
+    autenticacao:'rec_firma_autenticacao_copia', // Mapped to specific item
+    materializacao:'rec_firma_materializacao',
+    autenticacao_digital:'rec_firma_autenticacao_digital',
+    desmaterializacao:'rec_firma_desmaterializacao',
+    sinal_publico:'rec_firma_sinal_publico',
+    comunicado_de_venda:'rec_firma_comunicado_venda',
+    autorizacao_de_viagem_eletronica:'rec_firma_autorizacao_viagem',
   };
 
-  // busca serviço por ID
+  // Map service IDs to their data objects for easy lookup
+  const serviceDetailMap = {};
+  allServices.forEach(s => {
+      serviceDetailMap[s.id] = s;
+  });
+
+  // --- CORE LOGIC ---
   function findServiceById(id) {
-    return services.find(s => s.id === id);
+    return allServices.find(s => s.id === id);
   }
 
+  // Function to format service details, handling both CSV and specific items
   function formatServiceDetails(service) {
       if (!service) return 'Serviço não encontrado';
-      let details = `Serviço ${service.nome}\n`;
-      details += `Setor ${service.setor}\n`;
-      details += `Valor ${service.valor_formatado}\n`;
-      details += `Prazo de entrega ${service.prazo_entrega}\n`;
-      details += `Tempo médio de resposta inicial ${service.tempo_medio_resposta}\n`;
-      details += `Horário de atendimento ${service.horario_atendimento}\n`;
+      let details = `*${service.nome}*\n`;
+      details += `Setor: ${service.setor}\n`;
+      details += `Valor: ${service.valor_formatado}\n`;
+      details += `Prazo de entrega: ${service.prazo_entrega}\n`;
+      details += `Tempo médio de resposta inicial: ${service.tempo_medio_resposta}\n`;
+      details += `Horário de atendimento: ${service.horario_atendimento}\n`;
       details += `Pode ser feito 100% online? ${service.pode_ser_online_100 ? 'Sim' : 'Não'}\n`;
-      details += `Forma de pagamento ${service.forma_pagamento}\n`;
-      details += `Responsável Interno ${service.responsavel_interno ? 'Sim' : 'Não'}\n`;
-      details += `Encaminhar para outro órgão? ${service.encaminhar_orgao ? 'Sim' : 'Não'}\n`;
-      if (service.sistema_usado && service.sistema_usado !== 'Não especificado') {
-          details += `Sistema utilizado ${service.sistema_usado}\n`;
-      }
-      details += `\nDocumentos Necessários\n`;
-      if (service.documentos.length > 0) {
+      details += `Forma de pagamento: ${service.forma_pagamento}\n`;
+
+      details += `\n*Documentos Necessários*\n`;
+      if (service.docs_text) { // Use specific text for new items
+          details += service.docs_text.split('.').map(d => d.trim()).filter(d => d).map(d => `• ${d}.`).join('\n');
+      } else if (service.documentos && service.documentos.length > 0 && service.documentos[0] !== 'Nenhum documento especificado') { // Fallback for CSV items
           service.documentos.forEach(doc => { details += `• ${doc}\n`; });
       } else {
           details += '• Nenhum documento especificado';
@@ -346,18 +461,19 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
       return details;
   }
 
+  // Function to generate a checklist file content
   function checklistBlob(service){
       const text=[
           `--- Checklist ${service.nome} ---`,
-          `Setor ${service.setor}`,
-          `Valor Estimado ${service.valor_formatado}`,
-          `Prazo Estimado ${service.prazo_entrega}`,
-          `Horário de Atendimento ${service.horario_atendimento}`,
+          `Setor: ${service.setor}`,
+          `Valor Estimado: ${service.valor_formatado}`,
+          `Prazo Estimado: ${service.prazo_entrega}`,
+          `Horário de Atendimento: ${service.horario_atendimento}`,
           `Pode ser feito 100% online? ${service.pode_ser_online_100 ? 'Sim' : 'Não'}`,
-          `Forma de Pagamento ${service.forma_pagamento}`,
+          `Forma de Pagamento: ${service.forma_pagamento}`,
           '',
           'Documentos Necessários',
-          ...(service.documentos.length > 0 ? service.documentos.map((d,i)=>`${i+1}. ${d}`) : ['Nenhum especificado']),
+          ...(service.docs_text ? service.docs_text.split('.').map(d => d.trim()).filter(d => d) : (service.documentos && service.documentos.length > 0 ? service.documentos : ['Nenhum especificado'])).map((d,i)=>`${i+1}. ${d.endsWith('.') ? d : d + '.'}`), // Ensure items end with a period if they don't already
           '',
           'Observações',
           'Checklist demonstrativo'
@@ -365,32 +481,41 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
       return URL.createObjectURL(new Blob([text],{type:'text/plain'}));
   }
 
+  // Display service details and add options
   function showService(serviceId){
     const service = findServiceById(serviceId);
-    if(!service) { addBubble('Não encontrei informações para este serviço. Tente novamente ou peça atendente','them'); return; }
+    if(!service) { addBubble('Serviço não encontrado.','them'); return; }
+
     const formattedDetails = formatServiceDetails(service);
     const bubble = addBubble(formattedDetails,'them');
-    const link = el('span','link-like','Baixar checklist');
-    link.addEventListener('click',()=>{
-        const url=checklistBlob(service);
-        const a=document.createElement('a');
-        a.href=url;
-        a.download=`Checklist - ${slugify(service.nome)}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-    });
-    bubble.appendChild(el('div','time',' '));
-    bubble.appendChild(link);
+
+    // Add download button if documents are specified
+    if (service.documentos && service.documentos.length > 0 && service.documentos[0] !== 'Nenhum documento especificado' || service.docs_text) {
+        const link = el('span','link-like','Baixar checklist');
+        link.addEventListener('click',()=>{
+            const url=checklistBlob(service);
+            const a=document.createElement('a');
+            a.href=url;
+            a.download=`Checklist - ${slugify(service.nome)}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        });
+        bubble.appendChild(el('div','time',' '));
+        bubble.appendChild(link);
+    }
+
+    // Add relevant navigation buttons
     addButtons([
       {label:'Falar com atendente',payload:'atendente',meta:{setor:service.setor,assunto:service.nome}},
-      {label:'Início',payload:'inicio'}
+      {label:'Ver outros serviços', payload:'inicio'}
     ]);
   }
 
-  function showTabela(){
-      const rows = services.map(s =>
+  // Display the price table (from CSV) and optionally the official PDF link
+  function showTabela(showPdfLink = false){
+      const rows = allServices.map(s =>
           `<tr>
              <td>${s.nome}</td>
              <td>${s.setor}</td>
@@ -413,53 +538,101 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
               </thead>
               <tbody>${rows}</tbody>
           </table>`,'them',true);
-      addButtons([{label:'Início',payload:'inicio'}]);
+
+      const buttons = [{label:'Voltar ao Menu Principal', payload:'inicio'}];
+      if (showPdfLink) {
+          // Add button to open the official PDF
+          buttons.unshift({label:'Abrir Tabela Oficial (PDF)', payload:'tabela_emolumentos_pdf'});
+      }
+      addButtons(buttons);
   }
 
-  function showBank(){
-      addBubble(`Dados oficiais para pagamento\nBanco ${bank.banco}\nAgência ${bank.agencia}\nConta ${bank.conta}\nTipo ${bank.tipo}\nTitular ${bank.titular}\nCNPJ ${bank.cnpj}\nPix ${bank.pix}`,'them');
-      addBubble(bank.aviso,'them');
-      addButtons([{label:'Copiar Pix',payload:'copiar_pix'},{label:'Início',payload:'inicio'}]);
+  // Display bank information (new format)
+  function showBankInfo(){
+      let bankText = `*Dados Oficiais para Pagamento*\n\n`
+                   + `Razão Social: ${bankInfo.razSocial}\n`
+                   + `Nome Fantasia: ${bankInfo.nomeFantasia}\n`
+                   + `CNPJ: ${bankInfo.cnpj}\n`
+                   + `Banco: ${bankInfo.banco}\n`
+                   + `Agência: ${bankInfo.agencia}\n`
+                   + `Conta Corrente: ${bankInfo.conta}\n`
+                   + `\n*Chave PIX*\n`
+                   + `${bankInfo.pix}\n\n`
+                   + `*Aviso*\n`
+                   + `${bankInfo.aviso}`;
+      addBubble(bankText,'them');
+      addButtons([{label:'Copiar PIX',payload:'copiar_pix'},{label:'Voltar ao Menu Principal',payload:'inicio'}]);
   }
 
+  // Copy text to clipboard
   function copyToClipboard(text){
       navigator.clipboard?.writeText(text).then(()=>addBubble('Chave PIX copiada. Cole no seu aplicativo bancário','them')).catch(()=>addBubble('Falha ao copiar. Copie manualmente','them'));
   }
 
-  // --- HANDOFF E STATUS ---
-  const state = { awaitingSector:false, awaitingDescription:false, awaitingStatusId:false, chosenSector:null };
-
+  // --- Handoff & Status Handling ---
   function startHandoff(pref){
-      state.awaitingSector=true; state.chosenSector=null;
-      const intro = pref && pref.assunto ? `Encaminho para o setor de ${pref.setor} com assunto "${pref.assunto}" confirme o setor ou escolha outro` : `Para atendimento humano escolha o setor desejado ou descreva sua demanda`;
+      // Reset state related to handoff/ticket creation
+      state.awaitingSector = true;
+      state.awaitingDescription = false;
+      state.chosenSector = null;
+      state.currentOrderCode = null; // Reset for potential reuse
+      state.currentCPF = null;       // Reset for potential reuse
+      state.awaitingOrderCPF = false; // Reset video call state
+
+      let intro = `Para atendimento humano, por favor, escolha o setor desejado ou descreva sua demanda.`;
+      if(pref && pref.assunto) {
+          intro = `Encaminho para o setor de ${pref.setor} com assunto "${pref.assunto}". Por favor, confirme o setor ou escolha outro:`;
+      }
       addBubble(intro,'them');
+      // Display sector options as buttons
       addButtons(setores.map(s => ({label:s, payload:'setor_'+s})).concat([{label:'Cancelar',payload:'inicio'}]));
   }
 
   function confirmSector(sector){
-      state.awaitingSector=false; state.awaitingDescription=true; state.chosenSector=sector;
-      addBubble(`Setor "${sector}" selecionado descreva sua demanda em uma frase`,'them');
+      state.awaitingSector = false;
+      state.awaitingDescription = true;
+      state.chosenSector = sector;
+      addBubble(`Setor "${sector}" selecionado. Por favor, descreva sua demanda em uma frase.`,'them');
   }
 
+  // Create a new support ticket
   function openTicket(desc){
-      const id='ATD-'+Date.now().toString().slice(-6);
+      const id = 'ATD-' + Math.random().toString(36).substring(2, 8).toUpperCase(); // Generate unique ATD-XXXXXX code
       const sectorForStore = state.chosenSector;
-      addBubble(`Atendimento iniciado com sucesso\nProtocolo ${id}\nSetor ${sectorForStore}\nResumo ${desc}\nUm atendente vai responder`,'them');
-      state.awaitingDescription=false; state.chosenSector=null;
+      addBubble(`Atendimento iniciado com sucesso.\nProtocolo: ${id}\nSetor: ${sectorForStore}\nResumo: ${desc}\nUm atendente irá responder em breve.`,'them');
+
+      // Reset state after ticket creation
+      state.awaitingDescription = false;
+      state.chosenSector = null;
+
+      // Store ticket info locally
       localStorage.setItem(id, JSON.stringify({id, status:'Em análise', sector:sectorForStore, description:desc, requestedAt: new Date().toISOString()}));
-      addButtons([{label:'Verificar Status', payload:'status', meta:{id:id}}, {label:'Início', payload:'inicio'}]);
+
+      // Provide options to check status or return to menu
+      addButtons([
+          {label:'Verificar Status', payload:'status_query', meta:{id:id}},
+          {label:'Menu Principal', payload:'inicio'}
+      ]);
   }
 
+  // Initiate status check flow
   function checkStatusFlow(){
-      state.awaitingStatusId=true;
-      addBubble('Informe o protocolo iniciado com ATD por exemplo ATD-123456 para verificar o status','them');
+      state.awaitingStatusId = true;
+      state.awaitingOrderCPF = false; // Ensure other states are reset
+      addBubble('Por favor, informe o protocolo (ex: ATD-123456) para verificar o status.','them');
   }
 
+  // Resolve and display status for a given protocol ID
   function resolveStatus(id){
-      const raw=localStorage.getItem(id);
-      if(!raw){ addBubble('Protocolo não localizado verifique o número e tente novamente','them'); state.awaitingStatusId=false; return;}
-      const data=JSON.parse(raw);
+      const raw = localStorage.getItem(id);
+      if(!raw){
+          addBubble(`Protocolo "${id}" não localizado. Verifique o número e tente novamente.`,'them');
+          state.awaitingStatusId = false; // Reset state
+          return;
+      }
+      const data = JSON.parse(raw);
 
+      // Simulate status based on time elapsed
       const requestedTime = new Date(data.requestedAt);
       const now = new Date();
       const diffMinutes = (now - requestedTime) / (1000 * 60);
@@ -470,270 +643,494 @@ Protesto	Carta de Anuência 	 R$ 199,90 	Sim	WhatsApp	5 dias úteis	09:00 as 17:
       else if (diffMinutes < 180) status = 'Em andamento';
       else status = 'Aguardando resposta final';
 
-      addBubble(`Protocolo ${id}\nSetor ${data.sector}\nStatus ${status}\nDescrição ${data.description}`,'them');
-      state.awaitingStatusId=false;
-      addButtons([{label:'Início',payload:'inicio'}]);
+      addBubble(`*Status do Protocolo ${id}*\nSetor: ${data.sector}\nStatus: ${status}\nDescrição: ${data.description}`,'them');
+      state.awaitingStatusId = false; // Reset state
+      addButtons([{label:'Menu Principal', payload:'inicio'}]);
   }
 
-  // --- CORE ---
+  // Handle user input for Order of Service status query
+  function handleOrderStatusQuery(text) {
+      const match = text.trim().toUpperCase();
+      if (ORDER_CODE_REGEX.test(match)) {
+          resolveStatus(match);
+      } else {
+          addBubble('Formato de protocolo inválido. Por favor, use o formato ATD-123456.','them');
+      }
+  }
+
+  // Handle user input for Cartão de Firma status query
+  function handleFirmCardStatusQuery(text) {
+      const cpf = text.trim().replace(/[^\d]/g, ''); // Extract only digits
+      if (CPF_REGEX.test(cpf)) {
+          const responses = [
+              '🟢 Firma Válida pronta para uso.',
+              '🟡 Firma Vencida. Procure o cartório para renovação.',
+              '🔴 Sem Cartão de Assinatura. Procure o cartório para emitir.'
+          ];
+          const randomIndex = Math.floor(Math.random() * responses.length); // Simulate different outcomes
+          addBubble(responses[randomIndex],'them');
+      } else {
+          addBubble('Formato de CPF inválido. Por favor, insira um CPF com 11 dígitos numéricos.','them');
+      }
+      // Always return to main menu after this query
+      addButtons([{label:'Menu Principal', payload:'inicio'}]);
+  }
+
+  // --- Video Call Scheduling Logic ---
+  const scheduleSlots = [
+      "09:00–09:30", "09:30–10:00", "10:00–10:30", "10:30–11:00",
+      "11:00–11:30", "11:30–12:00", "13:00–13:30", "13:30–14:00",
+      "14:00–14:30", "14:30–15:00"
+  ];
+
+  // Initialize schedule state (check localStorage for today's bookings)
+  function initVideoCallState() {
+      state.awaitingOrderCPF = true; // User needs to provide Order Code and CPF
+      state.currentOrderCode = null;
+      state.currentCPF = null;
+
+      const todayKey = `videoCallBooked_${new Date().toISOString().split('T')[0]}`; // Unique key for today
+      const storedBookings = localStorage.getItem(todayKey);
+      if (storedBookings) {
+          state.videoCallBookedSlots = JSON.parse(storedBookings);
+      } else {
+          state.videoCallBookedSlots = {}; // Reset if no bookings for today
+      }
+
+      // Update current schedule availability based on stored bookings
+      scheduleSlots.forEach(slot => {
+          state.videoCallSchedule[slot] = state.videoCallBookedSlots[slot] ? 'occupied' : 'available';
+      });
+  }
+
+  // Display the scheduling grid
+  function displayVideoCallSchedule() {
+      const scheduleDiv = el('div', 'schedule-grid');
+      scheduleSlots.forEach(slot => {
+          const slotDiv = el('div', `schedule-slot ${state.videoCallSchedule[slot]}`);
+          slotDiv.textContent = slot;
+          if (state.videoCallSchedule[slot] === 'available') {
+              slotDiv.addEventListener('click', () => {
+                  confirmVideoCallBooking(slot); // Handle selection
+              });
+          }
+          scheduleDiv.appendChild(slotDiv);
+      });
+
+      // Add the schedule grid to the chat
+      const scheduleBubble = el('div', 'bubble them');
+      scheduleBubble.innerHTML = `<h4>Selecione um horário disponível:</h4>`;
+      scheduleBubble.appendChild(scheduleDiv);
+      chat.appendChild(scheduleBubble);
+      chat.scrollTop = chat.scrollHeight;
+  }
+
+  // Confirm booking when a slot is selected
+  function confirmVideoCallBooking(slot) {
+      const orderCode = state.currentOrderCode;
+      const cpf = state.currentCPF;
+
+      if (!orderCode || !cpf) {
+          addBubble('Erro: Protocolo e CPF não definidos para agendamento.','them');
+          return; // Should not happen if logic is correct
+      }
+
+      // Mark slot as occupied and store booking details
+      state.videoCallSchedule[slot] = 'occupied';
+      state.videoCallBookedSlots[slot] = { orderCode, cpf };
+
+      // Save updated bookings to localStorage
+      const todayKey = `videoCallBooked_${new Date().toISOString().split('T')[0]}`;
+      localStorage.setItem(todayKey, JSON.stringify(state.videoCallBookedSlots));
+
+      // Display confirmation message
+      const confirmationText = `✅ Agendamento confirmado!\n`
+                           + `Protocolo: ${orderCode}\n`
+                           + `CPF: ${cpf}\n`
+                           + `Horário: ${slot}\n`
+                           + `Uma videoconferência será realizada neste horário.`;
+      addBubble(confirmationText, 'them');
+
+      // Reset state after successful booking
+      state.awaitingOrderCPF = false;
+      state.currentOrderCode = null;
+      state.currentCPF = null;
+
+      // Return to main menu
+      addButtons([{label:'Menu Principal', payload:'inicio'}]);
+  }
+
+  // Handle the user's request to start the video call scheduling process
+  function handleVideoCallRequest(text){
+      // Extract Order Service code and CPF from the input text
+      const orderCodeMatch = text.match(/ordem de serviço (\S+)/i);
+      const cpfMatch = text.match(/cpf (\d{11})/i);
+
+      if (orderCodeMatch) state.currentOrderCode = orderCodeMatch[1].toUpperCase();
+      if (cpfMatch) state.currentCPF = cpfMatch[1];
+
+      // Check if both required pieces of information are valid
+      if (state.currentOrderCode && CPF_REGEX.test(state.currentCPF)) {
+           initVideoCallState(); // Initialize schedule (load bookings, set availability)
+           displayVideoCallSchedule(); // Show the grid
+      } else {
+           // Prompt user for correct format if input is incomplete or invalid
+           addBubble('Por favor, forneça ambos: a Ordem de Serviço e o CPF válido (11 dígitos). Use o formato: "Informar Ordem de Serviço [código] e CPF [11 dígitos]".','them');
+      }
+  }
+
+  // --- Payload Handling ---
   function handlePayload(payload, meta){
+    // Reset states that might interfere with unrelated flows before proceeding
+    state.awaitingSector = false;
+    state.awaitingDescription = false;
+    state.awaitingStatusId = false;
+    state.awaitingOrderCPF = false;
+    state.chosenSector = null;
+    state.currentOrderCode = null;
+    state.currentCPF = null;
+
+    // Handle menu navigation payloads
     if (payload.startsWith('menu_')) {
         switch (payload) {
             case 'menu_certidoes': showCertidoesMenu(); break;
             case 'menu_reconhecimento': showReconhecimentoMenu(); break;
-            case 'menu_autenticacao': showAutenticacaoMenu(); break;
+            case 'menu_autenticacao': showAutenticacaoMenu(); break; // Redirects to Reconhecimento Menu
             case 'menu_procuracoes_escrituras': showProcuracoesEscriturasMenu(); break;
             case 'menu_protesto': showProtestoMenu(); break;
+            case 'menu_registro_civil': showRegistroCivilMenu(); break; // New specific menu
+            case 'menu_tabelionato_notas': showTabelionatoNotasMenu(); break; // New specific menu
             default: addBubble(`Menu desconhecido ${payload}`, 'them');
         }
         return;
     }
 
+    // Handle specific actions and commands
     switch (payload) {
         case 'inicio':
-            addBubble('Como posso ajudar hoje','them');
-            showMainMenu();
+            addBubble('Como posso ajudar hoje?','them');
+            showInitialMenu(); // Display the main welcome menu
             return;
         case 'copiar_pix':
-            copyToClipboard(bank.pix);
+            copyToClipboard(bankInfo.pix);
             return;
         case 'atendente':
-            startHandoff(meta);
+            startHandoff(meta); // Start the handoff process
             return;
-        case 'status':
-            if (meta && meta.id) { resolveStatus(meta.id); return; }
-            checkStatusFlow();
+        case 'status_query': // Handle status check request
+            if (meta && meta.id) { resolveStatus(meta.id); return; } // If ID provided
+            checkStatusFlow(); // Otherwise, ask for ID
             return;
         case 'dados_bancarios':
-            showBank();
+            showBankInfo(); // Display new bank info
             return;
         case 'tabela_precos':
-            showTabela();
+            showTabela(); // Show the demonstrative table
+            return;
+        case 'tabela_emolumentos_pdf':
+            addBubble('Abrindo Tabela Oficial de Emolumentos em nova aba...','them');
+            window.open(VIDEO_CALL_PDF_URL, '_blank'); // Open PDF in new tab
+            addButtons([{label:'Continuar no chat', payload:'inicio'}]); // Allow user to return
+            return;
+        case 'agendar_video': // Payload to initiate video call scheduling
+            state.awaitingOrderCPF = true; // Set state to expect Order Code & CPF
+            addBubble('Para agendar uma videoconferência, por favor, informe a Ordem de Serviço e o CPF no formato: "Informar Ordem de Serviço [código] e CPF [11 dígitos]".','them');
             return;
     }
 
+    // Handle selection of sectors during handoff
     if (payload.startsWith('setor_')) {
         confirmSector(payload.replace('setor_', ''));
         return;
     }
 
+    // Handle requests for specific service details
     const service = findServiceById(payload);
-    if (service) { showService(service.id); return; }
-
-    addBubble(`Não entendi o comando ou serviço "${payload}" use os botões ou digite o nome de um serviço`,'them');
-  }
-
-  function iaRoute(text){
-    const result = IA.score(text);
-    if(result.score < 1.8) return null;
-    const mappedPayload = iaIntentToPayloadMap[result.intent];
-    return mappedPayload || null;
-  }
-function parseFreeText(text){
-  const t = text.toLowerCase();
-
-  if(state.awaitingSector && t){
-      const sector = setores.find(s => s.toLowerCase() === t);
-      if(sector){ confirmSector(sector); return; }
-  }
-  if(state.awaitingDescription && t){ openTicket(text); return; }
-  if(state.awaitingStatusId){
-      const id = text.trim().toUpperCase();
-      if(/^ATD-\d{6}$/.test(id)){ resolveStatus(id); return; }
-      addBubble('Formato de protocolo inválido use ATD-123456','them');
-      return;
-  }
-
-  if (t.includes('certidões') || t.includes('registro') || t.includes('nascimento') || t.includes('casamento') || t.includes('óbito')) { handlePayload('menu_certidoes'); return; }
-  if (t.includes('reconhecimento') || t.includes('firma') || t.includes('autenticação') || t.includes('cópia') || t.includes('xerox') || t.includes('materialização') || t.includes('desmaterialização') || t.includes('sinal público') || t.includes('comunicado de venda') || t.includes('autorização de viagem')) { handlePayload('menu_reconhecimento'); return; }
-  if (t.includes('procuração') || t.includes('escritura') || t.includes('imóvel') || t.includes('venda') || t.includes('compra') || t.includes('traslado') || t.includes('itbi') || t.includes('testamento') || t.includes('ata notarial') || t.includes('haia') || t.includes('e-notariado')) { handlePayload('menu_procuracoes_escrituras'); return; }
-  if (t.includes('protesto') || t.includes('apontamento') || t.includes('anuência') || t.includes('boleto')) { handlePayload('menu_protesto'); return; }
-
-  const directServiceMatch = services.find(s =>
-      s.id.toLowerCase() === t ||
-      s.nome.toLowerCase().includes(t) ||
-      s.nome.toLowerCase().split(' ').some(word => t.includes(word))
-  );
-  if (directServiceMatch) { handlePayload(directServiceMatch.id); return; }
-
-  if(aiToggle.checked){
-    const iaPayload = iaRoute(text);
-    if(iaPayload){ handlePayload(iaPayload); return; }
-  }
-
-  if(t.includes('atendente') || t.includes('humano') || t.includes('falar com')) { handlePayload('atendente'); return; }
-  if(t.includes('dados banc') || t.includes('pix') || t.includes('conta')) { handlePayload('dados_bancarios'); return; }
-  if(t.includes('tabela') || t.includes('preço') || t.includes('valor') || t.includes('quanto custa')) { handlePayload('tabela_precos'); return; }
-
-  routeFreeText(text);
-}
-
-  function parseFreeText(text){
-    const t = text.toLowerCase();
-
-    if(state.awaitingSector && t){
-        const sector = setores.find(s => s.toLowerCase() === t);
-        if(sector){ confirmSector(sector); return; }
-    }
-    if(state.awaitingDescription && t){ openTicket(text); return; }
-    if(state.awaitingStatusId){
-        const id = text.trim().toUpperCase();
-        if(/^ATD-\d{6}$/.test(id)){ resolveStatus(id); return; }
-        addBubble('Formato de protocolo inválido use ATD-123456','them');
+    if (service) {
+        showService(service.id); // Display details for the found service
         return;
     }
 
+    // Fallback for any unrecognized payload
+    addBubble(`Não entendi o comando ou serviço "${payload}". Tente novamente.`,'them');
+    addButtons([{label:'Menu Principal', payload:'inicio'}]);
+  }
+
+  // Route user input text to the appropriate handler or IA
+  function parseFreeText(text){
+    const t = text.toLowerCase();
+
+    // Prioritize specific commands and queries
+    if (t.includes('informar ordem de serviço') || t.includes('status protocolo')) {
+        handleOrderStatusQuery(text);
+        return;
+    }
+    if (t.includes('informar cpf') && !t.includes('e') && !t.includes('ordem de serviço')) { // Avoid conflict with video call request
+        handleFirmCardStatusQuery(text);
+        return;
+    }
+     if (t.includes('informar ordem de serviço') && t.includes('e') && t.includes('cpf')) {
+        handleVideoCallRequest(text); // Handle video call scheduling request
+        return;
+    }
+
+    // Handle sequential state-based interactions
+    if(state.awaitingSector && setores.some(s => t === s.toLowerCase())){
+        const sector = setores.find(s => s.toLowerCase() === t);
+        confirmSector(sector); // Confirm selected sector
+        return;
+    }
+    if(state.awaitingDescription && t){
+        openTicket(text); // Create ticket with description
+        return;
+    }
+    if(state.awaitingStatusId){
+        handleOrderStatusQuery(text); // Reuse status query handler if expecting ID
+        return;
+    }
+     if(state.awaitingOrderCPF){ // Handle input phase for video call scheduling
+        const orderCodeMatch = text.match(/ordem de serviço (\S+)/i);
+        const cpfMatch = text.match(/cpf (\d{11})/i);
+
+        if (orderCodeMatch) state.currentOrderCode = orderCodeMatch[1].toUpperCase();
+        if (cpfMatch) state.currentCPF = cpfMatch[1];
+
+        // Check if both Order Code and CPF are valid before proceeding
+        if (state.currentOrderCode && CPF_REGEX.test(state.currentCPF)) {
+             initVideoCallState(); // Initialize schedule state
+             displayVideoCallSchedule(); // Show available slots
+        } else {
+             addBubble('Por favor, forneça ambos: a Ordem de Serviço e o CPF válido (11 dígitos).','them');
+        }
+        return;
+    }
+
+    // Handle keywords mapping to menu navigation
     if (t.includes('certidões') || t.includes('registro') || t.includes('nascimento') || t.includes('casamento') || t.includes('óbito')) { handlePayload('menu_certidoes'); return; }
     if (t.includes('reconhecimento') || t.includes('firma') || t.includes('autenticação') || t.includes('cópia') || t.includes('xerox') || t.includes('materialização') || t.includes('desmaterialização') || t.includes('sinal público') || t.includes('comunicado de venda') || t.includes('autorização de viagem')) { handlePayload('menu_reconhecimento'); return; }
     if (t.includes('procuração') || t.includes('escritura') || t.includes('imóvel') || t.includes('venda') || t.includes('compra') || t.includes('traslado') || t.includes('itbi') || t.includes('testamento') || t.includes('ata notarial') || t.includes('haia') || t.includes('e-notariado')) { handlePayload('menu_procuracoes_escrituras'); return; }
     if (t.includes('protesto') || t.includes('apontamento') || t.includes('anuência') || t.includes('boleto')) { handlePayload('menu_protesto'); return; }
 
-    const directServiceMatch = services.find(s =>
+    // Try to match direct service lookup by keywords
+    const directServiceMatch = allServices.find(s =>
         s.id.toLowerCase() === t ||
         s.nome.toLowerCase().includes(t) ||
         s.nome.toLowerCase().split(' ').some(word => t.includes(word))
     );
     if (directServiceMatch) { handlePayload(directServiceMatch.id); return; }
 
+    // Use IA if enabled and confidence is sufficient
     if(aiToggle.checked){
-      const iaPayload = iaRoute(text);
-      if(iaPayload){ handlePayload(iaPayload); return; }
+      const iaPayload = IA.score(text); // Get IA intent and score
+      // Use threshold 1.5 for IA confidence
+      if(iaPayload.score >= 1.5 && iaIntentToPayloadMap[iaPayload.intent]){
+          const payload = iaIntentToPayloadMap[iaPayload.intent];
+          // Handle IA results: route to menus, specific actions, or service details
+          if (payload.startsWith('menu_') || ['tabela_precos', 'dados_bancarios', 'tabela_emolumentos_pdf'].includes(payload)) {
+              handlePayload(payload); // Navigate menus or perform actions
+          } else {
+              // Attempt to display details for a specific service identified by IA
+              const serviceFromIA = findServiceById(payload);
+              if (serviceFromIA) {
+                  showService(serviceFromIA.id);
+              } else {
+                  addBubble('A IA identificou um serviço, mas não consegui encontrar detalhes. Tente o menu.','them');
+              }
+          }
+          return;
+      }
     }
 
+    // Handle specific keywords mapping to direct actions not covered by menus or IA
     if(t.includes('atendente') || t.includes('humano') || t.includes('falar com')) { handlePayload('atendente'); return; }
     if(t.includes('dados banc') || t.includes('pix') || t.includes('conta')) { handlePayload('dados_bancarios'); return; }
-    if(t.includes('tabela') || t.includes('preço') || t.includes('valor') || t.includes('quanto custa')) { handlePayload('tabela_precos'); return; }
+    if(t.includes('tabela') || t.includes('preço') || t.includes('valor') || t.includes('emolumentos') || t.includes('quanto custa')) {
+        // Distinguish between general price table and official emoluments PDF
+        if (t.includes('emolumentos') || t.includes('provimento')) {
+            handlePayload('tabela_emolumentos_pdf'); // Official PDF
+        } else {
+            handlePayload('tabela_precos'); // Demonstrative table
+        }
+        return;
+    }
+    if (t.includes('agendar videoconferência') || t.includes('marcar reunião')) {
+        handlePayload('agendar_video'); // Initiate video call scheduling
+        return;
+    }
 
-    addBubble('Não entendi use os botões ou digite o nome do serviço por exemplo Nascimento ou Procuração ou digite atendente para falar com um humano','them');
+    // Default fallback message if input is not understood
+    addBubble('Não entendi. Por favor, use os botões do menu, digite o nome do serviço, ou um dos comandos como "Informar CPF [seu CPF]", "Informar Ordem de Serviço [código]", "Agendar Videoconferência", ou "Atendente".','them');
   }
 
-  // --- UI ---
-  function showMainMenu(){
-      addButtons([
-          {label:'Certidões e Registros', payload:'menu_certidoes'},
-          {label:'Reconhecimento de Firma', payload:'menu_reconhecimento'},
-          {label:'Autenticação de Cópia', payload:'menu_autenticacao'},
-          {label:'Procurações e Escrituras', payload:'menu_procuracoes_escrituras'},
-          {label:'Protesto', payload:'menu_protesto'},
-          {label:'Tabela de Preços Completa', payload:'tabela_precos'},
-          {label:'Dados Bancários/PIX', payload:'dados_bancarios'},
-          {label:'Falar com Atendente', payload:'atendente'}
-      ]);
+  // --- UI Functions ---
+
+  // Displays the initial welcome message and numbered menu
+  function showInitialMenu(){
+      addBubble('📑✨ Olá, seja bem-vindo(a) ao atendimento virtual do Cartório de Paz e Notas de Coxipó do Ouro! Estou aqui para te ajudar de forma rápida e prática. Para agilizar seu atendimento, selecione uma das opções abaixo digitando o número correspondente ou clicando no botão:', 'them');
+      const buttons = [
+          {label:'1. Reconhecimento de Firma', payload:'menu_reconhecimento'},
+          {label:'2. Registro Civil', payload:'menu_registro_civil'},
+          {label:'3. Tabelionato de Notas', payload:'menu_tabelionato_notas'},
+          {label:'4. Tabela de Emolumentos', payload:'tabela_emolumentos_pdf'},
+          {label:'5. Dados Bancários', payload:'dados_bancarios'},
+          {label:'6. Falar com um atendente', payload:'atendente'}
+      ];
+      addButtons(buttons);
   }
 
-  function showCertidoesMenu(){
+  // Menu for Certidões and Registros
+   function showCertidoesMenu(){
       addButtons([
-          {label:'Nascimento', payload:'nascimento'},
-          {label:'Casamento', payload:'casamento'},
-          {label:'Óbito', payload:'obito'},
-          {label:'Busca de Registro', payload:'busca_de_registro'},
-          {label:'2ª Via Breve Relato', payload:'2a_via_de_certidao_breve_relato'},
-          {label:'2ª Via Inteiro Teor', payload:'2a_via_de_certidao_inteiro_teor'},
-          {label:'Livro E', payload:'livro_e'},
-          {label:'Averbações e Retificações', payload:'averbacoes_retificacoes'},
+          {label:'Nascimento', payload:'reg_civil_nascimento'},
+          {label:'Casamento', payload:'reg_civil_casamento'},
+          {label:'Óbito', payload:'reg_civil_obito'},
+          {label:'Busca de Registro', payload:'reg_civil_busca'},
+          {label:'2ª Via Breve Relato', payload:'reg_civil_2via_breve'},
+          {label:'2ª Via Inteiro Teor', payload:'reg_civil_2via_inteiro'},
+          {label:'Livro E', payload:'reg_civil_livro_e'},
+          {label:'Averbações e Retificações', payload:'reg_civil_averbacoes'},
           {label:'Voltar', payload:'inicio'}
       ]);
   }
 
+  // Menu for Reconhecimento de Firma
   function showReconhecimentoMenu(){
       addButtons([
-          {label:'Abertura de Firma', payload:'abertura_de_firma'},
-          {label:'Reconhecimento por Semelhança', payload:'reconhecimento_por_semelhanca'},
-          {label:'Reconhecimento por Autenticidade', payload:'reconhecimento_por_autenticidade'},
-          {label:'Autenticação de Cópia', payload:'autenticacao'},
-          {label:'Materialização', payload:'materializacao'},
-          {label:'Autenticação Digital', payload:'autenticacao_digital'},
-          {label:'Desmaterialização', payload:'desmaterializacao'},
-          {label:'Sinal Público', payload:'sinal_publico'},
-          {label:'Comunicado de Venda', payload:'comunicado_de_venda'},
-          {label:'Autorização de Viagem Eletrônica', payload:'autorizacao_de_viagem_eletronica'},
+          {label:'1.1 Abertura de Firma', payload:'rec_firma_abertura'},
+          {label:'1.2 Reconhecimento por Semelhança', payload:'rec_firma_semelhanca'},
+          {label:'1.3 Reconhecimento por Autenticidade', payload:'rec_firma_autenticidade'},
+          {label:'1.4 Autenticação de Cópias', payload:'rec_firma_autenticacao_copia'},
+          {label:'1.5 Materialização', payload:'rec_firma_materializacao'},
+          {label:'1.6 Autenticação Digital', payload:'rec_firma_autenticacao_digital'},
+          {label:'1.7 Desmaterialização', payload:'rec_firma_desmaterializacao'},
+          {label:'1.8 Sinal Público', payload:'rec_firma_sinal_publico'},
+          {label:'1.9 Comunicado de Venda', payload:'rec_firma_comunicado_venda'},
+          {label:'1.10 Autorização de Viagem Eletrônica', payload:'rec_firma_autorizacao_viagem'},
           {label:'Voltar', payload:'inicio'}
       ]);
   }
 
+  // Menu for Autenticação (links to Reconhecimento Menu as per prompt)
   function showAutenticacaoMenu() {
-      addBubble('Para autenticação de cópias escolha uma opção','them');
-      showReconhecimentoMenu();
+      addBubble('Para autenticação de cópias e outros serviços relacionados a firma, por favor, escolha uma das opções abaixo:', 'them');
+      showReconhecimentoMenu(); // Reuse the Reconhecimento menu
   }
 
-  function showProcuracoesEscriturasMenu(){
-      addButtons([
-          {label:'Procuração Pública', payload:'procuracao_publica'},
-          {label:'Escritura Pública', payload:'escritura_publica'},
-          {label:'Traslados', payload:'traslados'},
-          {label:'Carta de Sentença', payload:'carta_de_sentenca'},
-          {label:'Guia de ITBI', payload:'guia_de_itbi'},
-          {label:'Testamento', payload:'testamento'},
-          {label:'Ata Notarial', payload:'ata_notarial'},
-          {label:'Apostilamento de Haia', payload:'apostilamento_de_haia'},
-          {label:'E-Notariado', payload:'e_notariado'},
-          {label:'Voltar', payload:'inicio'}
-      ]);
-  }
+   // Menu for Registro Civil
+   function showRegistroCivilMenu() {
+        addButtons([
+            {label:'2.1 Nascimento', payload:'reg_civil_nascimento'},
+            {label:'2.2 Casamento', payload:'reg_civil_casamento'},
+            {label:'2.3 Óbito', payload:'reg_civil_obito'},
+            {label:'2.4 Busca de Registro', payload:'reg_civil_busca'},
+            {label:'2.5 2ª Via Breve Relato', payload:'reg_civil_2via_breve'},
+            {label:'2.6 2ª Via Inteiro Teor', payload:'reg_civil_2via_inteiro'},
+            {label:'2.7 Livro E', payload:'reg_civil_livro_e'},
+            {label:'2.8 Averbações e Retificações', payload:'reg_civil_averbacoes'},
+            {label:'Voltar', payload:'inicio'}
+        ]);
+    }
 
+    // Menu for Tabelionato de Notas
+    function showTabelionatoNotasMenu() {
+        addButtons([
+            {label:'3.1 Procuração Pública', payload:'tab_notas_procuracao'},
+            {label:'3.2 Escritura Pública', payload:'tab_notas_escritura'},
+            {label:'3.3 Traslados', payload:'tab_notas_traslados'},
+            {label:'3.4 Carta de Sentença', payload:'tab_notas_carta_sentenca'},
+            {label:'3.5 Guia de ITBI', payload:'tab_notas_itbi'},
+            {label:'3.6 Testamento', payload:'tab_notas_testamento'},
+            {label:'3.7 Ata Notarial', payload:'tab_notas_ata_notarial'},
+            {label:'3.8 Apostilamento de Haia', payload:'tab_notas_apostilamento_haia'},
+            {label:'3.9 E-Notariado', payload:'tab_notas_e_notariado'},
+            {label:'Voltar', payload:'inicio'}
+        ]);
+    }
+
+  // Menu for Protesto
   function showProtestoMenu(){
       addButtons([
-          {label:'Certidão Negativa ou Positiva', payload:'certidao_negativa_positiva'},
-          {label:'Consulta CPF ou CNPJ', payload:'consulta_cpf_cnpj'},
-          {label:'Realizar Apontamento', payload:'realizar_apontamento'},
-          {label:'Certidão de Intimação', payload:'certidao_de_intimacao'},
-          {label:'Boleto em Apontamento', payload:'boleto_em_apontamento'},
-          {label:'Cancelamento de Protesto', payload:'cancelamento'},
-          {label:'Carta de Anuência', payload:'carta_de_anuencia'},
+          // Adjusted payload IDs for clarity and consistency
+          {label:'Certidão Negativa ou Positiva', payload:'protesto_certidao_negativa_positiva'},
+          {label:'Consulta CPF ou CNPJ', payload:'protesto_consulta_cpf_cnpj'},
+          {label:'Realizar Apontamento', payload:'protesto_realizar_apontamento'},
+          {label:'Certidão de Intimação', payload:'protesto_certidao_de_intimacao'},
+          {label:'Boleto em Apontamento', payload:'protesto_boleto_em_apontamento'},
+          {label:'Cancelamento de Protesto', payload:'protesto_cancelamento'},
+          {label:'Carta de Anuência', payload:'protesto_carta_de_anuencia'},
           {label:'Voltar', payload:'inicio'}
       ]);
   }
 
-  // --- DOM ---
+  // --- DOM Manipulation Helpers ---
   function el(tag, cls, html){ const e=document.createElement(tag); if(cls) e.className=cls; if(html!==undefined) e.innerHTML=html; return e; }
+
+  // Add a message bubble to the chat
   function addBubble(text, who='them', html=false){
     const b = el('div','bubble '+who);
-    b[html?'innerHTML':'textContent']=text;
-    const t = el('span','time', now()); b.appendChild(t);
+    b[html?'innerHTML':'textContent']=text; // Use innerHTML if content is pre-formatted HTML
+    const t = el('span','time', now()); b.appendChild(t); // Add timestamp
     chat.appendChild(b);
-    chat.scrollTop = chat.scrollHeight;
-    return b;
+    chat.scrollTop = chat.scrollHeight; // Auto-scroll to bottom
+    return b; // Return bubble element for potential further manipulation
   }
+
+  // Add a row of buttons for user interaction
   function addButtons(buttons){
     const wrap = el('div','buttons');
     buttons.forEach(btn=>{
         const b=el('button','',btn.label);
         b.addEventListener('click',()=>{
-            addBubble(btn.label, 'me');
-            handlePayload(btn.payload, btn.meta);
+            addBubble(btn.label, 'me'); // Display user's choice in chat
+            // Reset states that are not needed for sequential flows before handling payload
+            if (btn.payload !== 'setor_' && !btn.payload.startsWith('menu_') && btn.payload !== 'inicio') {
+                state.awaitingSector = false;
+                state.awaitingDescription = false;
+                state.chosenSector = null;
+            }
+            handlePayload(btn.payload, btn.meta); // Handle the button's action
         });
         wrap.appendChild(b);
     });
+    // Wrap buttons in a 'them' bubble for consistent styling
     const bubble = el('div','bubble them');
     bubble.appendChild(wrap);
     chat.appendChild(bubble);
-    chat.scrollTop = chat.scrollHeight;
+    chat.scrollTop = chat.scrollHeight; // Auto-scroll
   }
+
+  // Get current time formatted as HH:MM
   function now(){ return new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
 
-  // --- INIT ---
+  // --- Initialization ---
   function greet(){
-      addBubble('Olá bem-vindo ao assistente virtual do Cartório','them');
-      addBubble('Posso informar serviços valores prazos documentos e status você pode digitar o nome do serviço direto','them');
-      showMainMenu();
+      // Display the initial welcome message and menu upon loading
+      showInitialMenu();
   }
-  setTimeout(greet, 250);
 
+  // --- Event Listeners ---
+  // Send message when button is clicked
   sendBtn.addEventListener('click',()=>{
       const val = input.value.trim();
-      if(!val) return;
-      addBubble(val,'me');
-      input.value='';
-      setTimeout(()=>parseFreeText(val), 120);
+      if(!val) return; // Do nothing if input is empty
+      addBubble(val,'me'); // Display user message
+      input.value=''; // Clear input field
+      setTimeout(()=>parseFreeText(val), 120); // Process message after a short delay
   });
+  // Send message when Enter key is pressed
   input.addEventListener('keydown',e=>{
       if(e.key==='Enter'){ sendBtn.click(); }
   });
+  // Handle file uploads (currently just acknowledges receipt)
   fileInp.addEventListener('change',e=>{
-      if(!e.target.files.length) return;
-      addBubble(`${e.target.files.length} arquivo(s) recebidos descreva sua solicitação para análise dos anexos`,'them');
-      e.target.value = null;
+      if(!e.target.files.length) return; // Do nothing if no file selected
+      addBubble(`${e.target.files.length} arquivo(s) recebido(s). Descreva sua solicitação para análise dos anexos.`,'them');
+      e.target.value = null; // Clear the file input after processing
   });
+
+  // Start the chat interface when the page loads
+  setTimeout(greet, 250); // Use setTimeout to ensure DOM is ready
+
 })();
 </script>
 </body>
